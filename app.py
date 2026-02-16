@@ -15,7 +15,7 @@ st.set_page_config(page_title="Tasador Agrícola Noroeste", layout="centered", p
 ES_CLOUD_RUN = bool(os.environ.get("K_SERVICE") or os.environ.get("K_REVISION"))
 
 # -------------------------------------------------------------------
-# ESTILO: ocultar chrome Streamlit (solo tras login)
+# ESTILO: ocultar chrome Streamlit
 # -------------------------------------------------------------------
 def ocultar_chrome_streamlit():
     st.markdown(
@@ -33,51 +33,45 @@ def ocultar_chrome_streamlit():
     )
 
 # -------------------------------------------------------------------
-# LOGIN (5 vendedores definidos en código)
+# SELECCIÓN DE VENDEDOR (Sin Password)
 # -------------------------------------------------------------------
-VENDEDORES = {
-    "vendedor1": "clave1",
-    "vendedor2": "clave2",
-    "vendedor3": "clave3",
-    "vendedor4": "clave4",
-    "vendedor5": "clave5",
-}
+# Lista de nombres para el selector (puedes añadir más fácilmente)
+NOMBRES_VENDEDORES = ["Seleccionar...", "Vendedor 1", "Vendedor 2", "Vendedor 3", "Vendedor 4", "Vendedor 5"]
 
-def vista_login():
-    st.title("🔐 Acceso de vendedor")
-    with st.form("login_form", clear_on_submit=False):
-        vendedor = st.selectbox("Vendedor", list(VENDEDORES.keys()))
-        clave = st.text_input("Clave", type="password")
-        ok = st.form_submit_button("Entrar", use_container_width=True)
-
-    if ok:
-        if VENDEDORES.get(vendedor) == clave:
+def vista_seleccion_usuario():
+    st.title("🚜 Identificación de Usuario")
+    # Usamos un form para que la experiencia sea similar a la anterior
+    with st.form("identificacion_form"):
+        vendedor = st.selectbox("Indique su nombre para continuar:", NOMBRES_VENDEDORES)
+        entrar = st.form_submit_button("Acceder a la App", use_container_width=True)
+        
+    if entrar:
+        if vendedor != "Seleccionar...":
             st.session_state["logged_in"] = True
             st.session_state["vendedor"] = vendedor
             st.rerun()
         else:
-            st.error("Usuario o clave incorrectos.")
+            st.warning("Por favor, selecciona un nombre de la lista.")
 
+# Lógica de flujo de entrada
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 
 if not st.session_state["logged_in"]:
-    vista_login()
-    st.stop()
+    vista_seleccion_usuario()
+    st.stop() # Detiene la ejecución aquí hasta que se identifique
 
-# A partir de aquí: UI limpia (sin chrome Streamlit)
+# --- A partir de aquí: El usuario ya entró ---
 ocultar_chrome_streamlit()
 
-# -------------------------------------------------------------------
-# HEADER APP: Logo izquierda + botón salir derecha (sin mostrar vendedor)
-# -------------------------------------------------------------------
+# HEADER APP: Logo izquierda + botón salir derecha (Cierra sesión actual)
 col_logo, col_logout = st.columns([6, 1])
 
 with col_logo:
     if os.path.exists("agricolanoroestelogo.jpg"):
         st.image("agricolanoroestelogo.jpg", width=320)
     else:
-        st.markdown("## 🚜 Agrícola Noroeste")
+        st.markdown(f"## 🚜 Hola, {st.session_state['vendedor']}")
 
 with col_logout:
     if st.button("Salir", use_container_width=True):
@@ -86,7 +80,7 @@ with col_logout:
 
 st.divider()
 
-# --- 2. CONEXIÓN AL MOTOR DE IA (CONSOLA DEBUG) ---
+# --- 2. CONEXIÓN AL MOTOR DE IA ---
 if "vertex_client" not in st.session_state:
     try:
         creds = None
@@ -108,10 +102,9 @@ texto_ubicacion = (
 )
 
 # --- 5. FORMULARIO DE ENTRADA ---
-# Solo mostramos el formulario si no hay un informe generado
 if "informe_final" not in st.session_state:
     with st.form("form_tasacion"):
-        st.subheader("Datos del Peritaje")
+        st.subheader(f"Peritaje de: {st.session_state['vendedor']}") # Muestra quién está tasando
 
         fotos = st.file_uploader(
             "Subir fotos del tractor",
@@ -135,7 +128,6 @@ if "informe_final" not in st.session_state:
         if "vertex_client" not in st.session_state:
             st.error("El cliente de IA no está conectado.")
         else:
-            # Contenedor para mensajes de rastreo (Debug)
             status_placeholder = st.empty()
 
             with st.spinner("Procesando peritaje..."):
@@ -154,17 +146,12 @@ if "informe_final" not in st.session_state:
                         marca, modelo, informe_texto, fotos_pil, ref_b64
                     )
 
-                    # PASO C: PUNTO DE CONTROL DE DRIVE
-                    status_placeholder.warning(
-                        f"📤 Paso 3: Solicitando 'save to Drive' para {marca}_{modelo}..."
-                    )
+                    # PASO C: DRIVE
+                    status_placeholder.warning(f"📤 Paso 3: Guardando en carpeta de {st.session_state['vendedor']}...")
 
                     creds_drive = None if ES_CLOUD_RUN else dict(st.secrets["google"])
+                    carpeta_vendedor = st.session_state["vendedor"]
 
-                    # Carpeta destino = vendedor logueado
-                    carpeta_vendedor = st.session_state.get("vendedor", "General")
-
-                    # Llamada a la función de subida
                     id_archivo = google_drive_manager.subir_informe(
                         creds_drive,
                         f"Tasacion_{marca}_{modelo}.html",
@@ -173,29 +160,22 @@ if "informe_final" not in st.session_state:
                     )
 
                     if id_archivo:
-                        status_placeholder.success(f"✅ ¡ÉXITO! Guardado en Drive (ID: {id_archivo})")
-                    else:
-                        status_placeholder.error(
-                            "❌ El proceso de Drive terminó pero NO devolvió un ID de archivo."
-                        )
-
-                    # Guardar resultados en sesión
+                        status_placeholder.success(f"✅ ¡ÉXITO! Guardado en Drive.")
+                    
                     st.session_state.informe_final = informe_texto
                     st.session_state.html = html_res
                     st.session_state.nombre_archivo = f"Tasacion_{marca}_{modelo}.html"
 
-                    # Pequeña pausa para que veas el mensaje de éxito antes de recargar
                     import time
                     time.sleep(2)
                     st.rerun()
 
                 except Exception as e:
-                    st.error(f"💥 Error crítico en el flujo: {str(e)}")
+                    st.error(f"💥 Error crítico: {str(e)}")
 
-# --- 7. VISTA DE RESULTADOS (POST-PROCESADO) ---
+# --- 7. VISTA DE RESULTADOS ---
 if "informe_final" in st.session_state:
-    st.success("✅ Peritaje completado y archivado.")
-
+    st.success(f"✅ Peritaje completado por {st.session_state['vendedor']}.")
     st.markdown("### Resultado del Análisis")
     st.markdown(st.session_state.informe_final)
 
@@ -210,7 +190,6 @@ if "informe_final" in st.session_state:
         )
     with col_btn2:
         if st.button("🔄 NUEVA TASACIÓN", use_container_width=True):
-            # No borres login/sesión vendedor
             for k in ["informe_final", "html", "nombre_archivo"]:
                 if k in st.session_state:
                     del st.session_state[k]
