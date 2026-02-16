@@ -11,11 +11,12 @@ from streamlit_js_eval import get_geolocation
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Tasador Agrícola Noroeste", layout="centered", page_icon="🚜")
 
-# Detector de entorno Cloud Run
+# Detector de entorno Cloud Run / Local
 ES_CLOUD_RUN = bool(os.environ.get("K_SERVICE") or os.environ.get("K_REVISION"))
+creds_drive = None if ES_CLOUD_RUN else dict(st.secrets["google"])
 
 # -------------------------------------------------------------------
-# ESTILO: ocultar chrome Streamlit
+# ESTILO: Ocultar interfaz de Streamlit
 # -------------------------------------------------------------------
 def ocultar_chrome_streamlit():
     st.markdown(
@@ -33,45 +34,70 @@ def ocultar_chrome_streamlit():
     )
 
 # -------------------------------------------------------------------
-# SELECCIÓN DE VENDEDOR (Sin Password)
+# LÓGICA DE ACCESO (VENDEDORES DINÁMICOS DESDE DRIVE)
 # -------------------------------------------------------------------
-# Lista de nombres para el selector (puedes añadir más fácilmente)
-NOMBRES_VENDEDORES = ["Seleccionar...", "Vendedor 1", "Vendedor 2", "Vendedor 3", "Vendedor 4", "Vendedor 5"]
+def vista_acceso():
+    st.image("agricolanoroestelogo.jpg", width=300) if os.path.exists("agricolanoroestelogo.jpg") else st.title("🚜 Agrícola Noroeste")
+    st.subheader("Acceso de Tasadores")
 
-def vista_seleccion_usuario():
-    st.title("🚜 Identificación de Usuario")
-    # Usamos un form para que la experiencia sea similar a la anterior
-    with st.form("identificacion_form"):
-        vendedor = st.selectbox("Indique su nombre para continuar:", NOMBRES_VENDEDORES)
-        entrar = st.form_submit_button("Acceder a la App", use_container_width=True)
-        
-    if entrar:
-        if vendedor != "Seleccionar...":
-            st.session_state["logged_in"] = True
-            st.session_state["vendedor"] = vendedor
-            st.rerun()
-        else:
-            st.warning("Por favor, selecciona un nombre de la lista.")
+    # Leer lista actualizada de Drive
+    with st.spinner("Cargando lista de vendedores..."):
+        vendedores_lista = google_drive_manager.leer_vendedores(creds_drive)
 
-# Lógica de flujo de entrada
+    tab1, tab2 = st.tabs(["Seleccionar mi nombre", "Registrar nuevo"])
+
+    with tab1:
+        with st.form("form_login"):
+            vendedor_sel = st.selectbox("Selecciona tu nombre:", [""] + vendedores_lista)
+            entrar = st.form_submit_button("Entrar", use_container_width=True)
+            if entrar:
+                if vendedor_sel:
+                    st.session_state["logged_in"] = True
+                    st.session_state["vendedor"] = vendedor_sel
+                    st.rerun()
+                else:
+                    st.warning("Por favor, selecciona un nombre.")
+
+    with tab2:
+        with st.form("form_registro"):
+            nuevo_nombre = st.text_input("Nombre y Apellido del nuevo tasador:")
+            registrar = st.form_submit_button("Registrar y Entrar", use_container_width=True)
+            if registrar:
+                nombre_limpio = nuevo_nombre.strip()
+                if not nombre_limpio:
+                    st.error("El nombre no puede estar vacío.")
+                elif nombre_limpio in vendedores_lista:
+                    st.warning("Este nombre ya existe en la lista.")
+                else:
+                    # Actualizar Drive con el nuevo nombre
+                    vendedores_lista.append(nombre_limpio)
+                    if google_drive_manager.actualizar_vendedores(creds_drive, vendedores_lista):
+                        st.session_state["logged_in"] = True
+                        st.session_state["vendedor"] = nombre_limpio
+                        st.rerun()
+                    else:
+                        st.error("Error al guardar el nuevo vendedor en Drive.")
+
+# --- CONTROL DE SESIÓN ---
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 
 if not st.session_state["logged_in"]:
-    vista_seleccion_usuario()
-    st.stop() # Detiene la ejecución aquí hasta que se identifique
+    vista_acceso()
+    st.stop()
 
-# --- A partir de aquí: El usuario ya entró ---
+# Si llegamos aquí, el usuario está "logeado"
 ocultar_chrome_streamlit()
 
-# HEADER APP: Logo izquierda + botón salir derecha (Cierra sesión actual)
+# -------------------------------------------------------------------
+# HEADER APP
+# -------------------------------------------------------------------
 col_logo, col_logout = st.columns([6, 1])
-
 with col_logo:
     if os.path.exists("agricolanoroestelogo.jpg"):
-        st.image("agricolanoroestelogo.jpg", width=320)
+        st.image("agricolanoroestelogo.jpg", width=280)
     else:
-        st.markdown(f"## 🚜 Hola, {st.session_state['vendedor']}")
+        st.markdown(f"### Hola, {st.session_state['vendedor']}")
 
 with col_logout:
     if st.button("Salir", use_container_width=True):
@@ -83,14 +109,14 @@ st.divider()
 # --- 2. CONEXIÓN AL MOTOR DE IA ---
 if "vertex_client" not in st.session_state:
     try:
-        creds = None
+        creds_vertex = None
         if not ES_CLOUD_RUN and "google" in st.secrets:
-            creds = dict(st.secrets["google"])
-        st.session_state.vertex_client = ia_engine.conectar_vertex(creds)
+            creds_vertex = dict(st.secrets["google"])
+        st.session_state.vertex_client = ia_engine.conectar_vertex(creds_vertex)
     except Exception as e:
         st.error(f"Error inicializando Vertex AI: {e}")
 
-# --- 3. GESTIÓN DE UBICACIÓN (GPS) ---
+# --- 3. GESTIÓN DE UBICACIÓN ---
 loc = get_geolocation(component_key="gps_v1")
 texto_ubicacion = (
     location_manager.codificar_coordenadas(
@@ -101,10 +127,10 @@ texto_ubicacion = (
     else "UBICACIÓN NO DETECTADA"
 )
 
-# --- 5. FORMULARIO DE ENTRADA ---
+# --- 4. FORMULARIO DE PERITAJE ---
 if "informe_final" not in st.session_state:
     with st.form("form_tasacion"):
-        st.subheader(f"Peritaje de: {st.session_state['vendedor']}") # Muestra quién está tasando
+        st.subheader(f"Nuevo Peritaje: {st.session_state['vendedor']}")
 
         fotos = st.file_uploader(
             "Subir fotos del tractor",
@@ -121,68 +147,59 @@ if "informe_final" not in st.session_state:
             horas = st.text_input("Horas", value="2500")
 
         obs = st.text_area("Observaciones adicionales del perito")
-        submit = st.form_submit_button("🚀 INICIAR TASACIÓN Y GUARDAR", use_container_width=True)
+        submit = st.form_submit_button("🚀 INICIAR TASACIÓN Y GUARDAR EN DRIVE", use_container_width=True)
 
-    # --- 6. LÓGICA DE PROCESAMIENTO Y SUBIDA ---
     if submit and fotos:
         if "vertex_client" not in st.session_state:
-            st.error("El cliente de IA no está conectado.")
+            st.error("IA no conectada.")
         else:
             status_placeholder = st.empty()
-
-            with st.spinner("Procesando peritaje..."):
+            with st.spinner("Procesando..."):
                 try:
-                    # PASO A: Llamada a la IA
-                    status_placeholder.info("📡 Paso 1: Enviando datos a Gemini 2.0...")
+                    # A. Inteligencia Artificial
+                    status_placeholder.info("📡 Analizando con Gemini 2.0...")
                     informe_texto = ia_engine.realizar_peritaje(
                         st.session_state.vertex_client, marca, modelo, anio, horas, obs, fotos
                     )
 
-                    # PASO B: Preparar referencia oculta y HTML
-                    status_placeholder.info("📑 Paso 2: Generando documento de tasación...")
+                    # B. Generación de HTML
+                    status_placeholder.info("📑 Generando informe técnico...")
                     ref_b64 = base64.b64encode(texto_ubicacion.encode("utf-8")).decode("utf-8")
                     fotos_pil = [Image.open(f) for f in fotos]
                     html_res = html_generator.generar_informe_html(
                         marca, modelo, informe_texto, fotos_pil, ref_b64
                     )
 
-                    # PASO C: DRIVE
-                    status_placeholder.warning(f"📤 Paso 3: Guardando en carpeta de {st.session_state['vendedor']}...")
-
-                    creds_drive = None if ES_CLOUD_RUN else dict(st.secrets["google"])
-                    carpeta_vendedor = st.session_state["vendedor"]
-
+                    # C. Subida a Drive (A la carpeta del vendedor)
+                    status_placeholder.warning(f"📤 Guardando en carpeta de {st.session_state['vendedor']}...")
                     id_archivo = google_drive_manager.subir_informe(
                         creds_drive,
                         f"Tasacion_{marca}_{modelo}.html",
                         html_res,
-                        folder_name=carpeta_vendedor,
+                        folder_name=st.session_state["vendedor"],
                     )
 
                     if id_archivo:
-                        status_placeholder.success(f"✅ ¡ÉXITO! Guardado en Drive.")
-                    
-                    st.session_state.informe_final = informe_texto
-                    st.session_state.html = html_res
-                    st.session_state.nombre_archivo = f"Tasacion_{marca}_{modelo}.html"
-
-                    import time
-                    time.sleep(2)
-                    st.rerun()
+                        st.session_state.informe_final = informe_texto
+                        st.session_state.html = html_res
+                        st.session_state.nombre_archivo = f"Tasacion_{marca}_{modelo}.html"
+                        st.rerun()
+                    else:
+                        st.error("Error al subir el archivo a Drive.")
 
                 except Exception as e:
-                    st.error(f"💥 Error crítico: {str(e)}")
+                    st.error(f"Error crítico: {str(e)}")
 
-# --- 7. VISTA DE RESULTADOS ---
+# --- 5. VISTA DE RESULTADOS ---
 if "informe_final" in st.session_state:
-    st.success(f"✅ Peritaje completado por {st.session_state['vendedor']}.")
-    st.markdown("### Resultado del Análisis")
+    st.success("✅ Peritaje completado y archivado correctamente.")
+    st.markdown("### Resumen del Análisis")
     st.markdown(st.session_state.informe_final)
 
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
         st.download_button(
-            label="📄 VER/DESCARGAR HTML",
+            label="📄 DESCARGAR COPIA HTML",
             data=st.session_state.html,
             file_name=st.session_state.nombre_archivo,
             mime="text/html",
