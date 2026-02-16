@@ -3,7 +3,7 @@ import logging
 import sys
 import traceback
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 from google.oauth2 import service_account
 import google.auth
 
@@ -13,6 +13,9 @@ ID_UNIDAD_COMPARTIDA = "0AEU0RHjR-mDOUk9PVA"
 
 # ID de la carpeta "Tasaciones2" (Donde se colgarán las carpetas de los vendedores)
 ID_CARPETA_RAIZ = "1jHfVRjC6I0qPV9ArDIkhoKCYP7Iepmt9"
+
+# ID del fichero vendedores.txt (En la raíz de la unidad compartida)
+ID_FICHERO_VENDEDORES = "0AEU0RHjR-mDOUk9PVA" 
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
@@ -50,13 +53,65 @@ def _get_drive_service(creds_dict=None):
         print(f"❌ Error al crear servicio Drive: {e}", file=sys.stderr, flush=True)
         return None
 
+# --- FUNCIONES PARA GESTIÓN DE VENDEDORES (vendedores.txt) ---
+
+def leer_vendedores(creds_dict):
+    """
+    Lee el archivo vendedores.txt usando su ID fijo desde la Unidad Compartida.
+    """
+    try:
+        service = _get_drive_service(creds_dict)
+        if not service: return []
+
+        request = service.files().get_media(fileId=ID_FICHERO_VENDEDORES)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+        
+        # Decodificar y limpiar
+        contenido = fh.getvalue().decode('utf-8')
+        nombres = [line.strip() for line in contenido.splitlines() if line.strip()]
+        return sorted(list(set(nombres))) # Únicos y ordenados
+    except Exception as e:
+        print(f"⚠️ Aviso: No se pudo leer vendedores.txt o está vacío: {e}", file=sys.stderr)
+        return []
+
+def actualizar_vendedores(creds_dict, lista_nombres):
+    """
+    Sobrescribe el archivo vendedores.txt con la nueva lista.
+    """
+    try:
+        service = _get_drive_service(creds_dict)
+        if not service: return False
+
+        # Preparar contenido: un nombre por línea, ordenado y sin duplicados
+        nuevo_contenido = "\n".join(sorted(list(set(lista_nombres))))
+        fh = io.BytesIO(nuevo_contenido.encode('utf-8'))
+        media = MediaIoBaseUpload(fh, mimetype='text/plain', resumable=False)
+        
+        service.files().update(
+            fileId=ID_FICHERO_VENDEDORES,
+            media_body=media,
+            supportsAllDrives=True
+        ).execute()
+        
+        print(f"✅ Lista de vendedores actualizada en Drive.", flush=True)
+        return True
+    except Exception as e:
+        print(f"❌ Error actualizando vendedores.txt: {e}", file=sys.stderr)
+        return False
+
+# --- FUNCIONES DE CARPETAS E INFORMES ---
+
 def _get_or_create_folder(service, folder_name: str, parent_folder_id: str) -> str:
     """
     Busca o crea una carpeta dentro de parent_folder_id en la Unidad Compartida.
     """
     safe_name = _escape_drive_query_value(folder_name)
 
-    # Consulta específica para Unidades Compartidas
     query = (
         f"name = '{safe_name}' and "
         f"mimeType = 'application/vnd.google-apps.folder' and "
@@ -67,7 +122,7 @@ def _get_or_create_folder(service, folder_name: str, parent_folder_id: str) -> s
     resp = service.files().list(
         q=query,
         corpora="drive",
-        driveId=ID_UNIDAD_COMPARTIDA, # Buscamos dentro de esta unidad
+        driveId=ID_UNIDAD_COMPARTIDA,
         includeItemsFromAllDrives=True,
         supportsAllDrives=True,
         fields="files(id, name)",
@@ -78,7 +133,6 @@ def _get_or_create_folder(service, folder_name: str, parent_folder_id: str) -> s
     if files:
         return files[0]["id"]
 
-    # Si no existe, crear carpeta dentro de parent_folder_id
     folder_metadata = {
         "name": folder_name,
         "mimeType": "application/vnd.google-apps.folder",
@@ -87,7 +141,7 @@ def _get_or_create_folder(service, folder_name: str, parent_folder_id: str) -> s
 
     created = service.files().create(
         body=folder_metadata,
-        supportsAllDrives=True, # Permitir creación en Unidad Compartida
+        supportsAllDrives=True,
         fields="id",
     ).execute()
 
@@ -102,7 +156,7 @@ def subir_informe(creds_dict, nombre_archivo, contenido_html, folder_name="Gener
         if not service:
             return None
 
-        # 1. Obtener/Crear la carpeta del vendedor dentro de "Tasaciones2" (ID_CARPETA_RAIZ)
+        # 1. Obtener/Crear la carpeta del vendedor dentro de "Tasaciones2"
         folder_id = _get_or_create_folder(service, folder_name, ID_CARPETA_RAIZ)
 
         # 2. Preparar el contenido binario
@@ -121,7 +175,7 @@ def subir_informe(creds_dict, nombre_archivo, contenido_html, folder_name="Gener
         created = service.files().create(
             body=file_metadata,
             media_body=media,
-            supportsAllDrives=True, # Clave para que Cloud Run pueda escribir aquí
+            supportsAllDrives=True,
             fields="id, webViewLink",
         ).execute()
 
