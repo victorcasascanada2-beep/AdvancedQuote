@@ -44,6 +44,7 @@ def ocultar_chrome_streamlit():
 # VISTA DE ACCESO (VENDEDORES DINÁMICOS)
 # -------------------------------------------------------------------
 def vista_acceso():
+    # CAMBIO AQUÍ: Separar la lógica para evitar el error _repr_html_
     if os.path.exists("agricolanoroestelogo.jpg"):
         st.image("agricolanoroestelogo.jpg", width=300)
     else:
@@ -51,14 +52,15 @@ def vista_acceso():
         
     st.subheader("Acceso de Tasadores")
 
-    # Leer lista de Drive (Caché de sesión para no saturar la API)
+    # Leer lista de Drive (Caché de sesión)
     if "vendedores_lista" not in st.session_state:
-        with st.spinner("Cargando lista de tasadores desde Drive..."):
+        with st.spinner("Cargando tasadores..."):
+            # Asegúrate de que esta función solo devuelva una lista de strings
             res = google_drive_manager.leer_vendedores(creds_drive)
-            # Aseguramos que solo guardamos strings simples
             st.session_state["vendedores_lista"] = [str(v) for v in res] if res else []
 
     vendedores = st.session_state["vendedores_lista"]
+    # ... resto del código del formulario ...
 
     tab1, tab2 = st.tabs(["Seleccionar mi nombre", "Registrar nuevo"])
 
