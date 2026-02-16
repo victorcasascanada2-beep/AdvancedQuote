@@ -1,0 +1,32 @@
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  # 1) Build
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - "-t"
+      - "europe-west1-docker.pkg.dev/integrandorun/streamlit/streamlit-app:latest"
+      - "."
+
+  # 2) Push a Artifact Registry
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - "europe-west1-docker.pkg.dev/integrandorun/streamlit/streamlit-app:latest"
+
+  # 3) Deploy a Cloud Run
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - streamlit-app
+      - "--image=europe-west1-docker.pkg.dev/integrandorun/streamlit/streamlit-app:latest"
+      - "--region=europe-west1"
+      - "--platform=managed"
+      - "--allow-unauthenticated"
+
+images:
+  - "europe-west1-docker.pkg.dev/integrandorun/streamlit/streamlit-app:latest"
