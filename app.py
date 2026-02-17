@@ -577,7 +577,7 @@ st.session_state.setdefault(
     },
 )
 
-OPC_VIDA = [""] + [str(x) for x in range(0, 101, 10)]
+OPC_VIDA = [""] + [str(x) for x in range(0, 101, 20)]
 
 # ------------------------------------------------------------
 # FORMULARIO / RESULTADOS
@@ -748,8 +748,11 @@ if "result" in st.session_state:
         st.success("✅ Peritaje finalizado.")
         st.warning("⚠️ No se recibió ID de Drive (permisos/archivo).")
 
-    st.markdown("### Resultado del Análisis (IA)")
+    st.markdown("### 🤖 Resultado del Análisis (IA)")
+    
+    st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown(res["informe_final"])
+    st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("### Precios base del tasador (RESULTADO_FINAL)")
     c1, c2, c3 = st.columns(3)
