@@ -9,10 +9,10 @@ import google_drive_manager
 import location_manager
 from streamlit_js_eval import get_geolocation
 
-# --- CONFIG PÁGINA ---
 st.set_page_config(page_title="Tasador Agrícola Noroeste", layout="centered", page_icon="🚜")
 
 ES_CLOUD_RUN = bool(os.environ.get("K_SERVICE") or os.environ.get("K_REVISION"))
+ENV_KEY = "cloud" if ES_CLOUD_RUN else "local"
 
 
 def ocultar_chrome_streamlit():
@@ -31,26 +31,29 @@ def ocultar_chrome_streamlit():
     )
 
 
-def cargar_secrets_google_local():
-    """Solo para local/Streamlit. En Cloud Run no se usa."""
+def get_creds():
+    """
+    Cloud Run: None (ADC) y NO toca st.secrets.
+    Local: dict(st.secrets["google"]) (service account).
+    """
     if ES_CLOUD_RUN:
         return None
+
+    # Local: aquí sí usamos secrets y SI NO EXISTE, error claro.
     try:
-        if "google" in st.secrets:
-            return dict(st.secrets["google"])
+        return dict(st.secrets["google"])
     except Exception:
-        pass
-    return None
+        st.error("Faltan secrets locales: st.secrets['google'] (service account).")
+        st.stop()
 
 
-ENV_KEY = "cloud" if ES_CLOUD_RUN else "local"
-CREDS_DRIVE = None if ES_CLOUD_RUN else cargar_secrets_google_local()  # local => dict, cloud => None
+CREDS = get_creds()
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def get_vendedores_cached(env_key: str):
-    # env_key garantiza que cache no intente hashear dicts
-    creds = None if env_key == "cloud" else CREDS_DRIVE
+    # env_key separa cache cloud/local sin pasar dicts
+    creds = None if env_key == "cloud" else CREDS
     return google_drive_manager.leer_vendedores(creds)
 
 
@@ -69,20 +72,19 @@ def vista_acceso():
 
     st.subheader("Acceso de Tasadores")
 
-    # Carga lista ANTES del widget (evita “tengo que clicar”)
-    with st.spinner("Cargando tasadores..."):
-        vendedores = get_vendedores_cached(ENV_KEY) or []
-
     c1, c2 = st.columns([3, 1])
     with c2:
         if st.button("🔄 Refrescar", use_container_width=True):
             invalidate_vendedores_cache()
             st.rerun()
 
+    with st.spinner("Cargando tasadores..."):
+        vendedores = get_vendedores_cached(ENV_KEY) or []
+
     t1, t2 = st.tabs(["Seleccionar", "Registrar nuevo"])
 
     with t1:
-        with st.form("form_sel", clear_on_submit=False):
+        with st.form("form_sel"):
             v_sel = st.selectbox("Selecciona tu nombre:", [""] + vendedores, index=0)
             entrar = st.form_submit_button("Entrar", use_container_width=True)
         if entrar:
@@ -104,14 +106,12 @@ def vista_acceso():
                 st.error("Introduce un nombre válido.")
                 return
 
-            # si ya existe, entra directamente
             if nombre in vendedores:
                 st.session_state["logged_in"] = True
                 st.session_state["vendedor"] = nombre
                 st.rerun()
 
-            # En Cloud Run => creds None (ADC), en local => secrets
-            creds = None if ES_CLOUD_RUN else CREDS_DRIVE
+            creds = None if ES_CLOUD_RUN else CREDS
             ok = google_drive_manager.actualizar_vendedores(creds, vendedores + [nombre])
 
             if ok:
@@ -120,10 +120,9 @@ def vista_acceso():
                 st.session_state["vendedor"] = nombre
                 st.rerun()
             else:
-                st.error("No se pudo registrar en Drive. Revisa permisos o el ID del fichero vendedores.txt.")
+                st.error("No se pudo escribir en vendedores.txt (permisos o archivo no encontrado).")
 
 
-# --- SESIÓN ---
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 
@@ -133,29 +132,25 @@ if not st.session_state["logged_in"]:
 
 ocultar_chrome_streamlit()
 
-# --- HEADER ---
 col_logo, col_logout = st.columns([6, 1])
 with col_logo:
     st.markdown(f"### 🚜 {st.session_state.get('vendedor','')}")
 with col_logout:
     if st.button("Salir", use_container_width=True):
         for k in ["logged_in", "vendedor", "informe_final", "html", "nombre_archivo", "id_archivo_drive"]:
-            if k in st.session_state:
-                del st.session_state[k]
+            st.session_state.pop(k, None)
         st.rerun()
 
 st.divider()
 
-# --- IA (2 modos) ---
+# Vertex: Cloud Run => None (ADC), Local => dict secrets
 if "vertex_client" not in st.session_state:
     try:
-        # Cloud Run: None (ADC). Local: dict secrets
-        creds_vertex = None if ES_CLOUD_RUN else CREDS_DRIVE
+        creds_vertex = None if ES_CLOUD_RUN else CREDS
         st.session_state.vertex_client = ia_engine.conectar_vertex(creds_vertex)
     except Exception as e:
         st.error(f"Error inicializando Vertex AI: {e}")
 
-# --- GPS ---
 loc = get_geolocation(component_key="gps_v1")
 texto_ubicacion = (
     location_manager.codificar_coordenadas(loc["coords"]["latitude"], loc["coords"]["longitude"])
@@ -163,7 +158,6 @@ texto_ubicacion = (
     else "UBICACIÓN NO DETECTADA"
 )
 
-# --- FORMULARIO PERITAJE ---
 if "informe_final" not in st.session_state:
     with st.form("form_peritaje"):
         st.subheader("Datos del Peritaje")
@@ -204,11 +198,9 @@ if "informe_final" not in st.session_state:
                     nombre_fichero = f"Tasacion_{marca}_{modelo}.html"
                     carpeta = st.session_state.get("vendedor", "General")
 
-                    # Cloud Run: None (ADC). Local: dict secrets
-                    creds = None if ES_CLOUD_RUN else CREDS_DRIVE
-
+                    creds_drive = None if ES_CLOUD_RUN else CREDS
                     id_archivo = google_drive_manager.subir_informe(
-                        creds, nombre_fichero, html, folder_name=carpeta
+                        creds_drive, nombre_fichero, html, folder_name=carpeta
                     )
 
                     st.session_state.informe_final = inf
@@ -220,13 +212,12 @@ if "informe_final" not in st.session_state:
                 except Exception as e:
                     st.error(f"Error en el proceso: {e}")
 
-# --- RESULTADOS ---
 if "informe_final" in st.session_state:
     if st.session_state.get("id_archivo_drive"):
         st.success("✅ Peritaje finalizado y archivado en Drive.")
     else:
         st.success("✅ Peritaje finalizado.")
-        st.warning("⚠️ No se recibió ID de Drive (revisa permisos / logs).")
+        st.warning("⚠️ No se recibió ID de Drive (permisos/archivo).")
 
     st.markdown("### Resultado del Análisis")
     st.markdown(st.session_state.informe_final)
@@ -243,6 +234,5 @@ if "informe_final" in st.session_state:
     with c2:
         if st.button("🔄 NUEVA TASACIÓN", use_container_width=True):
             for k in ["informe_final", "html", "nombre_archivo", "id_archivo_drive"]:
-                if k in st.session_state:
-                    del st.session_state[k]
+                st.session_state.pop(k, None)
             st.rerun()
