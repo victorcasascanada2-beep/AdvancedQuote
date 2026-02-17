@@ -2,9 +2,8 @@ import streamlit as st
 import os
 import io
 import re
-import json
 import base64
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from PIL import Image
 
 import ia_engine
@@ -71,7 +70,7 @@ DEFAULT_COEFS = {
         "max_grandes_eur_por_cv": 50.0,
         "max_pequenos_eur_por_cv": 20.0,
     },
-    # opcional si algún día lo metes en el JSON
+    # opcional por si lo añades a JSON
     "autoguiado_eur_por_cv": 0.0,
     "autoguiado_eur_fijo": 0.0,
 }
@@ -156,7 +155,7 @@ def _state_to_uploadlike(fotos_state) -> List[InMemoryUpload]:
 
 
 # ------------------------------------------------------------
-# PARSEOS / VALIDACIÓN / ESTIMACIÓN BASE
+# VALIDACIÓN / PARSEO RESULTADO FINAL
 # ------------------------------------------------------------
 def _is_blank(s: Any) -> bool:
     return s is None or str(s).strip() == ""
@@ -166,81 +165,12 @@ def _parse_float(value: Any) -> float:
     return float(str(value).replace(",", ".").strip())
 
 
-def parse_first_euro_number(text: str) -> float:
-    """
-    Fallback: extrae el primer número tipo '12.345,67' o '12345.67' o '12345' de un texto.
-    """
-    if not text:
-        raise ValueError("Texto vacío")
-
-    m = re.search(r"(\d{1,3}(?:[.\s]\d{3})*(?:,\d+)?|\d+(?:[.,]\d+)?)", text)
-    if not m:
-        raise ValueError("No se encontró número")
-
-    s = m.group(1).strip().replace(" ", "")
-    if "," in s and "." in s:
-        s = s.replace(".", "").replace(",", ".")
-    else:
-        if "," in s:
-            s = s.replace(",", ".")
-    return float(s)
-
-
-def parse_precio_base_json(text: str) -> float:
-    """
-    Espera un JSON tipo: {"precio_base_eur": 12345}
-    Busca el primer bloque {...} y parsea.
-    """
-    if not text:
-        raise ValueError("Texto vacío")
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError("No hay JSON")
-    obj = json.loads(text[start : end + 1])
-    val = obj.get("precio_base_eur", None)
-    if val is None:
-        raise ValueError("Falta precio_base_eur")
-    return float(val)
-
-
-def detectar_desajuste_base(base_manual: float, base_estimado: float) -> str:
-    """
-    Warning si la diferencia es grande:
-      - > 15% y > 2500€
-    """
-    if base_manual <= 0 or base_estimado <= 0:
-        return ""
-
-    diff = abs(base_manual - base_estimado)
-    pct = diff / base_estimado
-
-    if diff > 2500 and pct > 0.15:
-        return (
-            f"⚠️ Desajuste grande: base manual {base_manual:,.0f}€ vs estimada {base_estimado:,.0f}€ "
-            f"(~{pct*100:.0f}%)."
-        )
-    return ""
-
-
 def validar_datos(draft: Dict[str, Any]) -> List[str]:
     errores: List[str] = []
 
     for campo in ["marca", "modelo", "anio", "horas", "cv"]:
         if _is_blank(draft.get(campo, "")):
             errores.append(f"El campo **{campo}** es obligatorio.")
-
-    # precio_base puede ser número o "ESTIMAR"
-    precio_base_raw = str(draft.get("precio_base", "")).strip()
-    if _is_blank(precio_base_raw):
-        errores.append("El campo **precio_base** es obligatorio (número o ESTIMAR).")
-    elif precio_base_raw.upper() != "ESTIMAR":
-        try:
-            x = _parse_float(precio_base_raw)
-            if x <= 0:
-                errores.append("El **precio base** debe ser mayor que 0.")
-        except Exception:
-            errores.append("El campo **precio_base** debe ser numérico o ESTIMAR.")
 
     # año
     anio = str(draft.get("anio", "")).strip()
@@ -273,16 +203,41 @@ def validar_datos(draft: Dict[str, Any]) -> List[str]:
     return errores
 
 
+def parse_resultado_final(text: str) -> Dict[str, float]:
+    """
+    Extrae claves del tipo:
+      VALOR_BASE: 78000
+      VALOR_MERCADO: 74147
+      PRECIO_VENTA: 68215
+      PRECIO_COMPRA: 63025
+    Devuelve dict con floats (euros).
+    """
+    if not text:
+        return {}
+
+    keys = ["VALOR_BASE", "AJUSTE_HORAS_%", "AJUSTE_ESTADO_%", "VALOR_MERCADO", "PRECIO_VENTA", "PRECIO_COMPRA"]
+    out: Dict[str, float] = {}
+
+    for k in keys:
+        m = re.search(rf"{k}\s*:\s*([\-]?\d+(?:[.,]\d+)?)", text, re.IGNORECASE)
+        if m:
+            try:
+                out[k.upper()] = float(m.group(1).replace(",", "."))
+            except Exception:
+                pass
+
+    return out
+
+
 # ------------------------------------------------------------
-# MOTOR DE CÁLCULO
+# MOTOR AJUSTES (EXTRAS/APARTADOS)
 # ------------------------------------------------------------
-def calcular_precio_final_y_desglose(
-    draft: Dict[str, Any], coefs: Dict[str, Any], precio_base_num: float
-) -> Tuple[float, List[Tuple[str, float]]]:
+def calcular_ajustes_extras(draft: Dict[str, Any], coefs: Dict[str, Any]) -> Tuple[float, List[Tuple[str, float]]]:
     """
     Devuelve:
-      - precio_final
-      - desglose [(concepto, importe)] donde importe puede ser + o -
+      - total_ajustes (positivo suma, negativo resta)
+      - desglose [(concepto, importe)]
+    NOTA: esto se muestra APARTE del precio base del tasador.
     """
     cv = _parse_float(draft["cv"])
     kg = _parse_float(draft.get("kg_contrapesos", 0) or 0)
@@ -291,7 +246,7 @@ def calcular_precio_final_y_desglose(
     vida_p = float(draft["vida_neum_pequenos"])
 
     desglose: List[Tuple[str, float]] = []
-    ajuste_total = 0.0
+    total = 0.0
 
     pala = bool(draft.get("extra_pala", False))
     anclajes = bool(draft.get("extra_anclajes_pala", False))
@@ -300,52 +255,52 @@ def calcular_precio_final_y_desglose(
     comp = bool(draft.get("extra_compresor", False))
     autog = bool(draft.get("extra_autoguiado", False))
 
-    # Pala
+    # Pala (incluye anclajes)
     if pala:
         v = float(coefs.get("pala_eur_por_cv", 0.0)) * cv
         desglose.append(("Pala usada", v))
-        ajuste_total += v
-        anclajes = False  # incluidos
+        total += v
+        anclajes = False
 
     # Anclajes (solo si NO pala)
     if anclajes:
         v = float(coefs.get("anclajes_eur_por_cv", 0.0)) * cv
         desglose.append(("Anclajes de pala", v))
-        ajuste_total += v
+        total += v
 
-    # TDF fuerza tripuntal: coef combinado
+    # TDF fuerza tripuntal y aplica coef combinado
     if tdf:
         trip = True
         v = float(coefs.get("tripuntal_tdf_eur_por_cv", 0.0)) * cv
         desglose.append(("Tripuntal + TDF del.", v))
-        ajuste_total += v
+        total += v
     elif trip:
         v = float(coefs.get("tripuntal_eur_por_cv", 0.0)) * cv
         desglose.append(("Tripuntal del.", v))
-        ajuste_total += v
+        total += v
 
     # Compresor fijo
     if comp:
         v = float(coefs.get("compresor_eur_fijo", 0.0))
         desglose.append(("Compresor aire", v))
-        ajuste_total += v
+        total += v
 
-    # Autoguiado (si algún día lo configuras en JSON)
+    # Autoguiado (si lo configuras en JSON)
     if autog:
         v_cv = float(coefs.get("autoguiado_eur_por_cv", 0.0)) * cv
         v_fx = float(coefs.get("autoguiado_eur_fijo", 0.0))
         v = v_cv + v_fx
         if v != 0:
             desglose.append(("Autoguiado", v))
-            ajuste_total += v
+            total += v
 
     # Contrapesos €/kg
     if kg > 0:
         v = float(coefs.get("contrapesos_eur_por_kg", 0.0)) * kg
         desglose.append((f"Contrapesos ({kg:.0f} kg)", v))
-        ajuste_total += v
+        total += v
 
-    # Neumáticos: castigo lineal por vida útil
+    # Neumáticos: castigo lineal por vida útil (grandes/pequeños)
     neu = coefs.get("neumaticos", {}) if isinstance(coefs.get("neumaticos", {}), dict) else {}
     max_g = float(neu.get("max_grandes_eur_por_cv", 50.0))
     max_p = float(neu.get("max_pequenos_eur_por_cv", 20.0))
@@ -355,38 +310,27 @@ def calcular_precio_final_y_desglose(
 
     if penal_g > 0:
         desglose.append((f"Neumáticos grandes (vida {vida_g:.0f}%)", -penal_g))
-        ajuste_total -= penal_g
+        total -= penal_g
     if penal_p > 0:
         desglose.append((f"Neumáticos pequeños (vida {vida_p:.0f}%)", -penal_p))
-        ajuste_total -= penal_p
+        total -= penal_p
 
-    precio_final = precio_base_num + ajuste_total
-    return precio_final, desglose
+    return total, desglose
 
 
-def desglose_texto(
-    precio_base: float,
-    precio_final: float,
-    items: List[Tuple[str, float]],
-    base_estimado: float | None = None,
-    aviso: str = "",
-) -> str:
-    def fmt(x: float) -> str:
-        return f"{x:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
+def fmt_eur(x: Optional[float]) -> str:
+    if x is None:
+        return "—"
+    return f"{x:,.0f} €".replace(",", "X").replace(".", ",").replace("X", ".")
 
+
+def bloque_extras_texto(total_ajustes: float, items: List[Tuple[str, float]]) -> str:
     lines = []
-    lines.append("[AJUSTES ECONÓMICOS]")
-    lines.append(f"- Precio base usado: {fmt(precio_base)}")
-    if base_estimado is not None:
-        lines.append(f"- Precio base estimado IA: {fmt(float(base_estimado))}")
-    if aviso:
-        lines.append(f"- AVISO: {aviso}")
-
+    lines.append("[EXTRAS / AJUSTES (APARTE)]")
     for concepto, importe in items:
         sign = "+" if importe >= 0 else "-"
-        lines.append(f"- {concepto}: {sign}{fmt(abs(importe))}")
-
-    lines.append(f"- Precio final: {fmt(precio_final)}")
+        lines.append(f"- {concepto}: {sign}{fmt_eur(abs(importe))}")
+    lines.append(f"- TOTAL EXTRAS/APARTADOS: {fmt_eur(total_ajustes)}")
     return "\n".join(lines)
 
 
@@ -503,7 +447,7 @@ texto_ubicacion = (
 )
 
 # ------------------------------------------------------------
-# BORRADOR PERSISTENTE (incluye extras + vida neumáticos + base/cv/kg)
+# BORRADOR PERSISTENTE
 # ------------------------------------------------------------
 st.session_state.setdefault(
     "draft",
@@ -512,7 +456,6 @@ st.session_state.setdefault(
         "modelo": "G125",
         "anio": "2025",
         "horas": "2500",
-        "precio_base": "ESTIMAR",  # por defecto
         "cv": "",
         "kg_contrapesos": "0",
         "vida_neum_grandes": "",
@@ -525,7 +468,6 @@ st.session_state.setdefault(
         "extra_tdf_del": False,
         "extra_compresor": False,
         "extra_autoguiado": False,
-        "precio_base_estimado": None,
     },
 )
 
@@ -565,13 +507,10 @@ if "result" not in st.session_state:
             anio = st.text_input("Año *", value=st.session_state["draft"]["anio"])
             horas = st.text_input("Horas *", value=st.session_state["draft"]["horas"])
 
-        colp1, colp2, colp3 = st.columns(3)
+        colp1, colp2 = st.columns(2)
         with colp1:
-            precio_base = st.text_input("Precio base (€) *", value=st.session_state["draft"]["precio_base"])
-            st.caption("Escribe un número o pon **ESTIMAR**.")
-        with colp2:
             cv = st.text_input("CV *", value=st.session_state["draft"]["cv"])
-        with colp3:
+        with colp2:
             kg_contrapesos = st.text_input("Kg contrapesos", value=st.session_state["draft"]["kg_contrapesos"])
 
         obs = st.text_area("Observaciones adicionales del perito", value=st.session_state["draft"]["obs"])
@@ -615,18 +554,15 @@ if "result" not in st.session_state:
         d["modelo"] = modelo
         d["anio"] = anio
         d["horas"] = horas
-        d["precio_base"] = precio_base
         d["cv"] = cv
         d["kg_contrapesos"] = kg_contrapesos
         d["obs"] = obs
-
         d["extra_pala"] = extra_pala
         d["extra_anclajes_pala"] = extra_anclajes_pala
         d["extra_tripuntal_del"] = extra_tripuntal_del
         d["extra_tdf_del"] = extra_tdf_del
         d["extra_compresor"] = extra_compresor
         d["extra_autoguiado"] = extra_autoguiado
-
         d["vida_neum_grandes"] = vida_neum_grandes
         d["vida_neum_pequenos"] = vida_neum_pequenos
 
@@ -640,91 +576,32 @@ if "result" not in st.session_state:
         else:
             with st.spinner("Procesando tasación..."):
                 try:
-                    # -------------------------
-                    # 1) Estimar precio base (JSON) o usar manual + avisar
-                    # -------------------------
-                    precio_base_raw = str(d["precio_base"]).strip()
-                    modo_estimar = (precio_base_raw.upper() == "ESTIMAR")
+                    # 1) Calculamos EXTRAS/APARTADOS (se mostrarán aparte)
+                    total_ajustes, desglose_items = calcular_ajustes_extras(d, COEFS)
+                    bloque_extras = bloque_extras_texto(total_ajustes, desglose_items)
 
-                    # Estimamos SIEMPRE para poder avisar si hay desajuste (puedes cambiarlo a modo_estimar)
-                    hacer_estimacion = True
-
-                    base_estimado = None
-                    aviso = ""
-
-                    if hacer_estimacion:
-                        try:
-                            prompt_estimacion = (
-                                'Devuelve EXCLUSIVAMENTE un JSON válido (sin texto adicional).\n'
-                                'Formato: {"precio_base_eur": 12345}\n'
-                                "- Solo un número entero en euros.\n"
-                                "- Sin símbolos, sin separadores de miles.\n"
-                            )
-
-                            fotos_for_ai_est = fotos_up if fotos_up else _state_to_uploadlike(d["fotos_state"])
-
-                            resp_base = ia_engine.realizar_peritaje(
-                                st.session_state.vertex_client,
-                                d["marca"],
-                                d["modelo"],
-                                d["anio"],
-                                d["horas"],
-                                prompt_estimacion,
-                                fotos_for_ai_est,
-                            )
-
-                            try:
-                                base_estimado = parse_precio_base_json(resp_base)
-                            except Exception:
-                                # fallback (por si el modelo no devuelve JSON estricto)
-                                base_estimado = parse_first_euro_number(resp_base)
-
-                            # guardrail: evitar "1", "2025", etc.
-                            if base_estimado is not None and base_estimado < 1000:
-                                base_estimado = None
-                        except Exception:
-                            base_estimado = None
-
-                    if modo_estimar:
-                        if base_estimado is None:
-                            st.error("No se pudo estimar el precio base automáticamente. Introduce un precio base manual.")
-                            st.stop()
-                        precio_base_num = float(base_estimado)
-                        d["precio_base"] = f"{precio_base_num:.0f}"  # fijamos base usada
-                    else:
-                        precio_base_num = _parse_float(d["precio_base"])
-                        if base_estimado is not None:
-                            aviso = detectar_desajuste_base(precio_base_num, float(base_estimado))
-                            if aviso:
-                                st.warning(aviso)
-
-                    d["precio_base_estimado"] = base_estimado
-
-                    # -------------------------
-                    # 2) Calcular precio final + desglose
-                    # -------------------------
-                    precio_final, desglose_items = calcular_precio_final_y_desglose(d, COEFS, precio_base_num)
-
-                    bloque_calc = desglose_texto(
-                        precio_base=precio_base_num,
-                        precio_final=precio_final,
-                        items=desglose_items,
-                        base_estimado=base_estimado,
-                        aviso=aviso,
+                    # 2) Pedimos al tasador su bloque RESULTADO_FINAL como siempre
+                    # (añadimos instrucción para asegurar formato clave:valor)
+                    instruccion_bloque = (
+                        "\n\n[INSTRUCCIÓN]\n"
+                        "Al final, devuelve también el bloque EXACTO (una línea por campo) con:\n"
+                        "BLOQUE: RESULTADO_FINAL\n"
+                        "VALOR_BASE: <numero>\n"
+                        "AJUSTE_HORAS_%: <numero>\n"
+                        "AJUSTE_ESTADO_%: <numero>\n"
+                        "VALOR_MERCADO: <numero>\n"
+                        "PRECIO_VENTA: <numero>\n"
+                        "PRECIO_COMPRA: <numero>\n"
+                        "Sin símbolos € ni separadores de miles.\n"
                     )
 
-                    # -------------------------
-                    # 3) Observaciones para IA (incluye desglose)
-                    # -------------------------
-                    obs_para_ia = (d["obs"] or "").strip()
-                    obs_para_ia = (obs_para_ia + "\n\n" + bloque_calc).strip()
+                    obs_para_ia = (d["obs"] or "").strip() + instruccion_bloque
+                    obs_para_ia = obs_para_ia.strip()
 
-                    # Fotos
                     fotos_pil = _state_to_pil_images(d["fotos_state"])
                     fotos_for_ai = fotos_up if fotos_up else _state_to_uploadlike(d["fotos_state"])
 
-                    # IA final
-                    inf = ia_engine.realizar_peritaje(
+                    informe = ia_engine.realizar_peritaje(
                         st.session_state.vertex_client,
                         d["marca"],
                         d["modelo"],
@@ -734,12 +611,16 @@ if "result" not in st.session_state:
                         fotos_for_ai,
                     )
 
-                    # HTML
+                    # 3) Parseamos los precios del tasador
+                    base_dict = parse_resultado_final(informe)
+
+                    # 4) HTML (si quieres, el bloque extras también puede ir dentro del HTML,
+                    # pero sin tocar html_generator, lo dejamos visible en pantalla y en el informe IA aparte)
                     ref_b64 = base64.b64encode(texto_ubicacion.encode("utf-8")).decode("utf-8")
                     html = html_generator.generar_informe_html(
                         d["marca"],
                         d["modelo"],
-                        inf,
+                        informe,
                         fotos_pil,
                         ref_b64,
                     )
@@ -755,12 +636,16 @@ if "result" not in st.session_state:
                         folder_name=carpeta,
                     )
 
+                    # 5) Guardamos resultado
                     st.session_state["result"] = {
-                        "informe_final": inf,
+                        "informe_final": informe,
                         "html": html,
                         "nombre_archivo": nombre_fichero,
                         "id_archivo_drive": id_archivo,
-                        "bloque_calc": bloque_calc,
+                        "base_dict": base_dict,
+                        "extras_total": total_ajustes,
+                        "extras_items": desglose_items,
+                        "bloque_extras": bloque_extras,
                     }
                     st.rerun()
 
@@ -770,6 +655,9 @@ if "result" not in st.session_state:
 # ---------------- RESULTADOS ----------------
 if "result" in st.session_state:
     res = st.session_state["result"]
+    base = res.get("base_dict", {}) or {}
+    extras_total = float(res.get("extras_total", 0.0))
+    bloque_extras = res.get("bloque_extras", "")
 
     if res.get("id_archivo_drive"):
         st.success("✅ Peritaje finalizado y archivado en Drive.")
@@ -780,8 +668,30 @@ if "result" in st.session_state:
     st.markdown("### Resultado del Análisis (IA)")
     st.markdown(res["informe_final"])
 
-    st.markdown("### Desglose económico")
-    st.code(res["bloque_calc"])
+    st.markdown("### Precios base del tasador (RESULTADO_FINAL)")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("VALOR_MERCADO", fmt_eur(base.get("VALOR_MERCADO")))
+    with c2:
+        st.metric("PRECIO_VENTA", fmt_eur(base.get("PRECIO_VENTA")))
+    with c3:
+        st.metric("PRECIO_COMPRA", fmt_eur(base.get("PRECIO_COMPRA")))
+
+    st.markdown("### Extras / Ajustes (APARTE)")
+    st.code(bloque_extras)
+
+    # Referencia opcional (sin mezclar): mostramos “con extras” como cálculo auxiliar
+    if base.get("VALOR_MERCADO") is not None:
+        st.markdown("### Referencia (base + extras) — solo orientativo")
+        r1, r2, r3 = st.columns(3)
+        with r1:
+            st.metric("Mercado + Extras", fmt_eur(float(base["VALOR_MERCADO"]) + extras_total))
+        with r2:
+            if base.get("PRECIO_VENTA") is not None:
+                st.metric("Venta + Extras", fmt_eur(float(base["PRECIO_VENTA"]) + extras_total))
+        with r3:
+            if base.get("PRECIO_COMPRA") is not None:
+                st.metric("Compra + Extras", fmt_eur(float(base["PRECIO_COMPRA"]) + extras_total))
 
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
