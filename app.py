@@ -65,12 +65,10 @@ def _is_blank(s: str) -> bool:
 def validar_datos(draft: Dict[str, Any]) -> List[str]:
     errores: List[str] = []
 
-    # Campos obligatorios
     for campo in ["marca", "modelo", "anio", "horas"]:
         if _is_blank(draft.get(campo, "")):
             errores.append(f"El campo **{campo}** es obligatorio.")
 
-    # Validación mínima razonable
     anio = str(draft.get("anio", "")).strip()
     horas = str(draft.get("horas", "")).strip()
 
@@ -85,10 +83,15 @@ def validar_datos(draft: Dict[str, Any]) -> List[str]:
         except Exception:
             errores.append("El campo **horas** debe ser numérico.")
 
-    # Fotos obligatorias (mínimo 4)
     fotos_state = draft.get("fotos_state") or []
     if len(fotos_state) < 4:
         errores.append("Debes subir **mínimo 4 fotos** para tasar.")
+
+    # Desgaste obligatorio (si quieres que sea obligatorio)
+    if _is_blank(draft.get("desgaste_del", "")):
+        errores.append("Selecciona el **% de desgaste de ruedas delanteras**.")
+    if _is_blank(draft.get("desgaste_tras", "")):
+        errores.append("Selecciona el **% de desgaste de ruedas traseras**.")
 
     return errores
 
@@ -253,7 +256,7 @@ texto_ubicacion = (
 )
 
 # ------------------------------------------------------------
-# BORRADOR PERSISTENTE
+# BORRADOR PERSISTENTE (incluye extras + desgastes)
 # ------------------------------------------------------------
 st.session_state.setdefault(
     "draft",
@@ -263,9 +266,24 @@ st.session_state.setdefault(
         "anio": "2025",
         "horas": "2500",
         "obs": "",
-        "fotos_state": [],  # mínimo 4 para tasar
+        "fotos_state": [],
+
+        # NUEVO: desgaste ruedas
+        "desgaste_del": "50%",
+        "desgaste_tras": "50%",
+
+        # NUEVO: extras (checkboxes)
+        "extra_pala": False,
+        "extra_anclajes_pala": False,
+        "extra_tripuntal_del": False,
+        "extra_tdf_del": False,
+        "extra_compresor": False,
+        "extra_autoguiado": False,
     },
 )
+
+# Opciones para desplegables
+OPC_DESGASTE = ["", "0%", "10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%", "100%"]
 
 # ------------------------------------------------------------
 # FORMULARIO / RESULTADOS
@@ -311,6 +329,38 @@ if "result" not in st.session_state:
             horas = st.text_input("Horas *", value=st.session_state["draft"]["horas"])
 
         obs = st.text_area("Observaciones adicionales del perito", value=st.session_state["draft"]["obs"])
+
+        st.markdown("#### Extras del tractor")
+        e1, e2, e3 = st.columns(3)
+        with e1:
+            extra_pala = st.checkbox("Pala", value=st.session_state["draft"]["extra_pala"])
+            extra_anclajes_pala = st.checkbox("Anclajes de pala", value=st.session_state["draft"]["extra_anclajes_pala"])
+        with e2:
+            extra_tripuntal_del = st.checkbox("Tripuntal del.", value=st.session_state["draft"]["extra_tripuntal_del"])
+            extra_tdf_del = st.checkbox("TDF del.", value=st.session_state["draft"]["extra_tdf_del"])
+        with e3:
+            extra_compresor = st.checkbox("Compresor", value=st.session_state["draft"]["extra_compresor"])
+            extra_autoguiado = st.checkbox("Autoguiado", value=st.session_state["draft"]["extra_autoguiado"])
+
+        st.markdown("#### Desgaste de ruedas")
+        d1, d2 = st.columns(2)
+        with d1:
+            desgaste_del = st.selectbox(
+                "% desgaste ruedas delanteras *",
+                options=OPC_DESGASTE,
+                index=OPC_DESGASTE.index(st.session_state["draft"]["desgaste_del"])
+                if st.session_state["draft"]["desgaste_del"] in OPC_DESGASTE
+                else 0,
+            )
+        with d2:
+            desgaste_tras = st.selectbox(
+                "% desgaste ruedas traseras *",
+                options=OPC_DESGASTE,
+                index=OPC_DESGASTE.index(st.session_state["draft"]["desgaste_tras"])
+                if st.session_state["draft"]["desgaste_tras"] in OPC_DESGASTE
+                else 0,
+            )
+
         submit = st.form_submit_button("🚀 INICIAR TASACIÓN Y GUARDAR", use_container_width=True)
 
     if submit:
@@ -320,6 +370,16 @@ if "result" not in st.session_state:
         st.session_state["draft"]["anio"] = anio
         st.session_state["draft"]["horas"] = horas
         st.session_state["draft"]["obs"] = obs
+
+        st.session_state["draft"]["extra_pala"] = extra_pala
+        st.session_state["draft"]["extra_anclajes_pala"] = extra_anclajes_pala
+        st.session_state["draft"]["extra_tripuntal_del"] = extra_tripuntal_del
+        st.session_state["draft"]["extra_tdf_del"] = extra_tdf_del
+        st.session_state["draft"]["extra_compresor"] = extra_compresor
+        st.session_state["draft"]["extra_autoguiado"] = extra_autoguiado
+
+        st.session_state["draft"]["desgaste_del"] = desgaste_del
+        st.session_state["draft"]["desgaste_tras"] = desgaste_tras
 
         errores = validar_datos(st.session_state["draft"])
         if errores:
@@ -331,6 +391,30 @@ if "result" not in st.session_state:
         else:
             with st.spinner("Procesando tasación..."):
                 try:
+                    # Construir un resumen de extras/desgaste para pasarlo a la IA dentro de 'obs'
+                    extras_activos = []
+                    if st.session_state["draft"]["extra_pala"]:
+                        extras_activos.append("Pala")
+                    if st.session_state["draft"]["extra_anclajes_pala"]:
+                        extras_activos.append("Anclajes de pala")
+                    if st.session_state["draft"]["extra_tripuntal_del"]:
+                        extras_activos.append("Tripuntal delantero")
+                    if st.session_state["draft"]["extra_tdf_del"]:
+                        extras_activos.append("TDF delantero")
+                    if st.session_state["draft"]["extra_compresor"]:
+                        extras_activos.append("Compresor")
+                    if st.session_state["draft"]["extra_autoguiado"]:
+                        extras_activos.append("Autoguiado")
+
+                    bloque_extras = (
+                        "\n\n[EXTRAS Y RUEDAS]\n"
+                        f"- Extras: {', '.join(extras_activos) if extras_activos else 'Ninguno'}\n"
+                        f"- Desgaste ruedas delanteras: {st.session_state['draft']['desgaste_del']}\n"
+                        f"- Desgaste ruedas traseras: {st.session_state['draft']['desgaste_tras']}\n"
+                    )
+
+                    obs_para_ia = (st.session_state["draft"]["obs"] or "") + bloque_extras
+
                     fotos_pil = _state_to_pil_images(st.session_state["draft"]["fotos_state"])
                     fotos_for_ai = fotos_up if fotos_up else _state_to_uploadlike(st.session_state["draft"]["fotos_state"])
 
@@ -340,7 +424,7 @@ if "result" not in st.session_state:
                         st.session_state["draft"]["modelo"],
                         st.session_state["draft"]["anio"],
                         st.session_state["draft"]["horas"],
-                        st.session_state["draft"]["obs"],
+                        obs_para_ia,
                         fotos_for_ai,
                     )
 
