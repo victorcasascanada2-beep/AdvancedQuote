@@ -3,7 +3,7 @@
 def obtener_prompt_tasacion(marca, modelo, anio, horas, observaciones):
     """
     TASACIÓN (SIN INTERNET): estable.
-    Ajuste por horas MÁS SUAVE (capado).
+    Bloque RESULTADO_FINAL: al INICIO, formato máquina (sin bullets) para parseo robusto.
     """
     return f"""
 Eres un tasador profesional (perito) de maquinaria agrícola de Agrícola Noroeste.
@@ -27,25 +27,31 @@ REGLAS (OBLIGATORIAS):
    - AJUSTE_HORAS_% debe estar entre -3% y +2% (no más).
 5) Importes enteros (sin decimales).
 
-CÁLCULO:
+CÁLCULO (OBLIGATORIO):
 - VALOR_BASE: estimación razonable según año, horas y gama del modelo (sin web).
 - VALOR_MERCADO = VALOR_BASE * (1 + AJUSTE_HORAS_%/100) * (1 + AJUSTE_ESTADO_%/100)
 - PRECIO_VENTA = VALOR_MERCADO * 0.92
 - PRECIO_COMPRA = VALOR_MERCADO * 0.85
 
-FORMATO DE SALIDA (EXACTO):
+FORMATO DE SALIDA (EXACTO Y OBLIGATORIO):
+1) LO PRIMERO de tu respuesta debe ser este bloque EXACTO (sin bullets, una línea por campo):
+BLOQUE: RESULTADO_FINAL
+VALOR_BASE: <entero>
+AJUSTE_HORAS_%: <entero con signo>
+AJUSTE_ESTADO_%: <entero con signo>
+VALOR_MERCADO: <entero>
+PRECIO_VENTA: <entero>
+PRECIO_COMPRA: <entero>
+(Reglas de formato: SOLO números, sin símbolo €, sin separadores de miles, sin espacios en los números)
+
+2) Después, devuelve estos bloques:
 BLOQUE: RESUMEN_FOTOS
 - Foto 1: ...
 - Foto 2: ...
 ...
-BLOQUE: CALCULO
-- VALOR_BASE: <entero>
-- AJUSTE_HORAS_%: <entero con signo>
-- AJUSTE_ESTADO_%: <entero con signo>
-- VALOR_MERCADO: <entero>
-BLOQUE: RESULTADO_FINAL
-- PRECIO_VENTA: <entero>
-- PRECIO_COMPRA: <entero>
+
+BLOQUE: JUSTIFICACION
+- Explica en 4-8 viñetas por qué VALOR_BASE y ajustes (sin web)
 
 NO añadas texto fuera de estos bloques.
 """.strip()
@@ -54,7 +60,6 @@ NO añadas texto fuera de estos bloques.
 def obtener_prompt_comparables(marca, modelo, anio, horas):
     """
     JUSTIFICACIÓN (CON INTERNET): lista anuncios en TABLA, SIN URLs.
-    Nota: al no incluir URLs, evitamos enlaces viejos/no válidos.
     """
     return f"""
 Eres asistente de búsqueda de anuncios de maquinaria agrícola.
