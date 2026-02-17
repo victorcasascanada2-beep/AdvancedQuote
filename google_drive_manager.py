@@ -1,6 +1,7 @@
 import io
+import json
 import sys
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
@@ -10,7 +11,9 @@ import google.auth
 # --- TU UNIDAD COMPARTIDA ---
 ID_UNIDAD_COMPARTIDA = "0AEU0RHjR-mDOUk9PVA"  # driveId (Shared Drive)
 ID_CARPETA_RAIZ_TASACIONES = "1jHfVRjC6I0qPV9ArDIkhoKCYP7Iepmt9"  # carpeta raíz donde cuelgan las carpetas vendedor
+
 NOMBRE_FICHERO_VENDEDORES = "vendedores.txt"
+NOMBRE_FICHERO_COEFS = "coeficientes_tasacion.json"  # <--- necesario para leer coeficientes
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
@@ -77,15 +80,17 @@ def _find_file_id_in_shared_drive(service, filename: str) -> Optional[str]:
         return None
 
 
-def leer_vendedores(creds_dict=None) -> List[str]:
+# ------------------------------------------------------------
+# LECTURA/ESCRITURA GENÉRICA (útil para coefs)
+# ------------------------------------------------------------
+def leer_texto_por_nombre(creds_dict=None, filename: str = "") -> str:
     service = _get_drive_service(creds_dict)
-    if not service:
-        return []
+    if not service or not filename:
+        return ""
 
-    file_id = _find_file_id_in_shared_drive(service, NOMBRE_FICHERO_VENDEDORES)
+    file_id = _find_file_id_in_shared_drive(service, filename)
     if not file_id:
-        print("⚠️ vendedores.txt no encontrado en la unidad compartida.", file=sys.stderr)
-        return []
+        return ""
 
     try:
         request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
@@ -95,28 +100,29 @@ def leer_vendedores(creds_dict=None) -> List[str]:
         while not done:
             _, done = downloader.next_chunk()
 
-        texto = fh.getvalue().decode("utf-8", errors="replace")
-        vendedores = sorted({n.strip() for n in texto.splitlines() if n.strip()})
-        return vendedores
+        return fh.getvalue().decode("utf-8", errors="replace")
     except Exception as e:
-        print(f"⚠️ Error leyendo vendedores.txt: {e}", file=sys.stderr)
-        return []
+        print(f"⚠️ Error leyendo {filename}: {e}", file=sys.stderr)
+        return ""
 
 
-def actualizar_vendedores(creds_dict, lista_nombres: List[str]) -> bool:
+def escribir_texto_por_nombre(creds_dict, filename: str, contenido: str, mimetype: str = "text/plain") -> bool:
+    """
+    Sobrescribe un archivo existente (por nombre) dentro de la Shared Drive.
+    Si no existe, devuelve False (evita duplicados por error).
+    """
     service = _get_drive_service(creds_dict)
-    if not service:
+    if not service or not filename:
         return False
 
-    file_id = _find_file_id_in_shared_drive(service, NOMBRE_FICHERO_VENDEDORES)
+    file_id = _find_file_id_in_shared_drive(service, filename)
     if not file_id:
-        print("⚠️ vendedores.txt no encontrado; no se puede actualizar.", file=sys.stderr)
+        print(f"⚠️ {filename} no encontrado; no se puede sobrescribir.", file=sys.stderr)
         return False
 
     try:
-        contenido = "\n".join(sorted({n.strip() for n in lista_nombres if n and n.strip()}))
-        fh = io.BytesIO(contenido.encode("utf-8"))
-        media = MediaIoBaseUpload(fh, mimetype="text/plain", resumable=False)
+        fh = io.BytesIO((contenido or "").encode("utf-8"))
+        media = MediaIoBaseUpload(fh, mimetype=mimetype, resumable=False)
 
         service.files().update(
             fileId=file_id,
@@ -125,10 +131,50 @@ def actualizar_vendedores(creds_dict, lista_nombres: List[str]) -> bool:
         ).execute()
         return True
     except Exception as e:
-        print(f"❌ Error actualizando vendedores.txt: {e}", file=sys.stderr)
+        print(f"❌ Error escribiendo {filename}: {e}", file=sys.stderr)
         return False
 
 
+# ------------------------------------------------------------
+# VENDEDORES
+# ------------------------------------------------------------
+def leer_vendedores(creds_dict=None) -> List[str]:
+    texto = leer_texto_por_nombre(creds_dict, NOMBRE_FICHERO_VENDEDORES)
+    if not texto:
+        print("⚠️ vendedores.txt no encontrado o vacío.", file=sys.stderr)
+        return []
+    vendedores = sorted({n.strip() for n in texto.splitlines() if n.strip()})
+    return vendedores
+
+
+def actualizar_vendedores(creds_dict, lista_nombres: List[str]) -> bool:
+    contenido = "\n".join(sorted({n.strip() for n in (lista_nombres or []) if n and n.strip()}))
+    return escribir_texto_por_nombre(creds_dict, NOMBRE_FICHERO_VENDEDORES, contenido, mimetype="text/plain")
+
+
+# ------------------------------------------------------------
+# COEFICIENTES
+# ------------------------------------------------------------
+def leer_coeficientes(creds_dict=None) -> Dict[str, Any]:
+    """
+    Lee coeficientes_tasacion.json desde la Shared Drive.
+    Debe contener un JSON tipo:
+      { "pala_eur_por_cv": 41.6, "neumaticos": {...}, ... }
+    """
+    texto = leer_texto_por_nombre(creds_dict, NOMBRE_FICHERO_COEFS)
+    if not texto:
+        return {}
+    try:
+        data = json.loads(texto)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        print(f"⚠️ JSON inválido en {NOMBRE_FICHERO_COEFS}: {e}", file=sys.stderr)
+        return {}
+
+
+# ------------------------------------------------------------
+# SUBIDA INFORME (HTML) A CARPETA POR VENDEDOR
+# ------------------------------------------------------------
 def _get_or_create_folder(service, folder_name: str, parent_id: str) -> Optional[str]:
     folder_name_q = _escape_drive_query_value(folder_name)
 
