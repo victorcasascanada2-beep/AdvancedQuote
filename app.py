@@ -408,11 +408,19 @@ if not st.session_state["logged_in"]:
 ocultar_chrome_streamlit()
 
 # ------------------------------------------------------------
-# HEADER
+# HEADER (AQUÍ ES DONDE SE AÑADE EL LOGO PARA TAMBIÉN VERLO EN RESULTADOS)
 # ------------------------------------------------------------
 col_logo, col_controls = st.columns([6, 2])
 with col_logo:
+    # Logo SIEMPRE (también cuando ya existe "result")
+    if os.path.exists("agricolanoroestelogo.jpg"):
+        st.image("agricolanoroestelogo.jpg", width=220)
+    else:
+        st.markdown("### Agrícola Noroeste")
+
+    # Debajo, el usuario (como en tu captura)
     st.markdown(f"### 🚜 {st.session_state.get('vendedor','')}")
+
 with col_controls:
     if st.button("♻️ Recargar coeficientes", use_container_width=True):
         invalidate_coef_cache()
@@ -614,8 +622,7 @@ if "result" not in st.session_state:
                     # 3) Parseamos los precios del tasador
                     base_dict = parse_resultado_final(informe)
 
-                    # 4) HTML (si quieres, el bloque extras también puede ir dentro del HTML,
-                    # pero sin tocar html_generator, lo dejamos visible en pantalla y en el informe IA aparte)
+                    # 4) HTML (informe descargable)
                     ref_b64 = base64.b64encode(texto_ubicacion.encode("utf-8")).decode("utf-8")
                     html = html_generator.generar_informe_html(
                         d["marca"],
