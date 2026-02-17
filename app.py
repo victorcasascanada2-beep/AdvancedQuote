@@ -1,3 +1,8 @@
+# app.py — Tasador Agrícola Noroeste (COMPLETO, de cabo a rabo)
+# - Mantiene tu lógica (IA/Drive/GPS/HTML)
+# - Arregla la función de branding (indentación correcta)
+# - Asegura que TODAS las funciones están definidas antes de usarse
+
 import streamlit as st
 import os
 import io
@@ -15,11 +20,7 @@ from streamlit_js_eval import get_geolocation
 # ------------------------------------------------------------
 # CONFIG PÁGINA
 # ------------------------------------------------------------
-st.set_page_config(
-    page_title="Tasador Agrícola Noroeste",
-    layout="centered",
-    page_icon="🚜"
-)
+st.set_page_config(page_title="Tasador Agrícola Noroeste", layout="centered", page_icon="🚜")
 
 ES_CLOUD_RUN = bool(os.environ.get("K_SERVICE") or os.environ.get("K_REVISION"))
 ENV_KEY = "cloud" if ES_CLOUD_RUN else "local"
@@ -29,7 +30,8 @@ ENV_KEY = "cloud" if ES_CLOUD_RUN else "local"
 # UI GLOBAL (OCULTAR CHROME + BRANDING)
 # ------------------------------------------------------------
 def ocultar_chrome_streamlit():
-    st.markdown("""
+    st.markdown(
+        """
 <div class="hero">
   <h1>🌱 Tasación de maquinaria</h1>
   <p>Agrícola Noroeste · Valoración orientativa basada en estado, horas y mercado</p>
@@ -45,7 +47,7 @@ def ocultar_chrome_streamlit():
 /* Ocultar cromos Streamlit */
 #MainMenu, footer, header {visibility: hidden;}
 
-/* Hero */
+/* Hero / cabecera */
 .hero {
   background: linear-gradient(
     135deg,
@@ -95,7 +97,7 @@ div[data-baseweb="textarea"] textarea {
   transform: translateY(-1px);
 }
 
-/* Pills */
+/* Pills / badges */
 .pill {
   display: inline-block;
   padding: 4px 10px;
@@ -106,7 +108,9 @@ div[data-baseweb="textarea"] textarea {
   color: #1F3D2B;
 }
 </style>
-""", unsafe_allow_html=True)
+""",
+        unsafe_allow_html=True,
+    )
 
 
 # ------------------------------------------------------------
@@ -114,15 +118,15 @@ div[data-baseweb="textarea"] textarea {
 # ------------------------------------------------------------
 def get_creds():
     """
-    Cloud Run: None (ADC)
-    Local: st.secrets["google"]
+    Cloud Run: None (ADC) y NO toca st.secrets nunca.
+    Local: dict(st.secrets["google"]) (service account).
     """
     if ES_CLOUD_RUN:
         return None
     try:
         return dict(st.secrets["google"])
     except Exception:
-        st.error("Faltan secrets locales: st.secrets['google']")
+        st.error("Faltan secrets locales: st.secrets['google'] (service account).")
         st.stop()
 
 
@@ -130,12 +134,310 @@ CREDS = get_creds()
 
 
 # ------------------------------------------------------------
-# LOGIN / ACCESO
+# COEFICIENTES (Drive)
 # ------------------------------------------------------------
-if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = False
+DEFAULT_COEFS = {
+    "pala_eur_por_cv": 41.6,
+    "anclajes_eur_por_cv": 16.6,
+    "tripuntal_eur_por_cv": 20.8,
+    "tripuntal_tdf_eur_por_cv": 25.0,
+    "compresor_eur_fijo": 1000.0,
+    "contrapesos_eur_por_kg": 1.0,
+    "neumaticos": {
+        "max_grandes_eur_por_cv": 50.0,
+        "max_pequenos_eur_por_cv": 20.0,
+    },
+    "autoguiado_eur_por_cv": 0.0,
+    "autoguiado_eur_fijo": 0.0,
+}
 
-if not st.session_state["logged_in"]:
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_coeficientes_cached(env_key: str) -> Dict[str, Any]:
+    creds = None if env_key == "cloud" else CREDS
+    coefs = google_drive_manager.leer_coeficientes(creds) or {}
+
+    merged = dict(DEFAULT_COEFS)
+    for k, v in coefs.items():
+        if k == "neumaticos" and isinstance(v, dict):
+            merged_neu = dict(DEFAULT_COEFS["neumaticos"])
+            merged_neu.update(v)
+            merged["neumaticos"] = merged_neu
+        else:
+            merged[k] = v
+    return merged
+
+
+def invalidate_coef_cache():
+    try:
+        get_coeficientes_cached.clear()
+    except Exception:
+        pass
+
+
+# ------------------------------------------------------------
+# VENDEDORES (Drive)
+# ------------------------------------------------------------
+@st.cache_data(ttl=30, show_spinner=False)
+def get_vendedores_cached(env_key: str) -> List[str]:
+    creds = None if env_key == "cloud" else CREDS
+    return google_drive_manager.leer_vendedores(creds) or []
+
+
+def invalidate_vendedores_cache():
+    try:
+        get_vendedores_cached.clear()
+    except Exception:
+        pass
+
+
+# ------------------------------------------------------------
+# HELPERS FOTOS (persistentes en session_state)
+# ------------------------------------------------------------
+def _fotos_to_state(uploaded_files) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for f in uploaded_files or []:
+        out.append(
+            {
+                "name": getattr(f, "name", "foto.jpg"),
+                "type": getattr(f, "type", "image/jpeg"),
+                "data": f.getvalue(),  # bytes
+            }
+        )
+    return out
+
+
+def _state_to_pil_images(fotos_state) -> List[Image.Image]:
+    fotos_pil: List[Image.Image] = []
+    for item in fotos_state or []:
+        fotos_pil.append(Image.open(io.BytesIO(item["data"])))
+    return fotos_pil
+
+
+class InMemoryUpload(io.BytesIO):
+    """Wrapper mínimo para simular UploadedFile en ia_engine (name/type + stream)."""
+
+    def __init__(self, data: bytes, name: str = "foto.jpg", mime: str = "image/jpeg"):
+        super().__init__(data)
+        self.name = name
+        self.type = mime
+
+
+def _state_to_uploadlike(fotos_state) -> List[InMemoryUpload]:
+    return [
+        InMemoryUpload(x["data"], x.get("name", "foto.jpg"), x.get("type", "image/jpeg"))
+        for x in (fotos_state or [])
+    ]
+
+
+# ------------------------------------------------------------
+# VALIDACIÓN / PARSEO RESULTADO FINAL
+# ------------------------------------------------------------
+def _is_blank(s: Any) -> bool:
+    return s is None or str(s).strip() == ""
+
+
+def _parse_float(value: Any) -> float:
+    return float(str(value).replace(",", ".").strip())
+
+
+def validar_datos(draft: Dict[str, Any]) -> List[str]:
+    errores: List[str] = []
+
+    for campo in ["marca", "modelo", "anio", "horas", "cv"]:
+        if _is_blank(draft.get(campo, "")):
+            errores.append(f"El campo **{campo}** es obligatorio.")
+
+    anio = str(draft.get("anio", "")).strip()
+    if anio and (not anio.isdigit() or len(anio) != 4):
+        errores.append("El campo **año** debe ser un número de 4 dígitos (ej: 2022).")
+
+    for campo_num in ["horas", "cv", "kg_contrapesos"]:
+        val = str(draft.get(campo_num, "")).strip()
+        if val == "":
+            continue
+        try:
+            x = _parse_float(val)
+            if x < 0:
+                errores.append(f"El campo **{campo_num}** no puede ser negativo.")
+        except Exception:
+            errores.append(f"El campo **{campo_num}** debe ser numérico.")
+
+    fotos_state = draft.get("fotos_state") or []
+    if len(fotos_state) < 4:
+        errores.append("Debes subir **mínimo 4 fotos** para tasar.")
+
+    if _is_blank(draft.get("vida_neum_grandes", "")):
+        errores.append("Selecciona la **vida útil neumáticos grandes (%)**.")
+    if _is_blank(draft.get("vida_neum_pequenos", "")):
+        errores.append("Selecciona la **vida útil neumáticos pequeños (%)**.")
+
+    return errores
+
+
+def _find_block_resultado_final(text: str) -> str:
+    """
+    Extrae el bloque BLOQUE: RESULTADO_FINAL hasta el siguiente BLOQUE: o fin.
+    """
+    if not text:
+        return ""
+    m = re.search(r"(?is)BLOQUE\s*:\s*RESULTADO_FINAL\s*(.*)", text)
+    if not m:
+        return ""
+    tail = m.group(1)
+    m2 = re.search(r"(?is)\n\s*BLOQUE\s*:\s*", tail)
+    return tail[: m2.start()] if m2 else tail
+
+
+def _extract_int_line(block: str, key: str) -> Optional[float]:
+    """
+    Captura líneas tipo:
+      VALOR_BASE: 78000
+      - VALOR_BASE: 78000
+    (sin separadores de miles según prompt)
+    """
+    if not block:
+        return None
+    m = re.search(rf"(?im)^\s*-?\s*{re.escape(key)}\s*:\s*([\-]?\d+)\s*$", block)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except Exception:
+        return None
+
+
+def parse_resultado_final(text: str) -> Dict[str, float]:
+    """
+    Nunca deja vacíos:
+    - Intenta leer RESULTADO_FINAL.
+    - Si falta algún campo, lo calcula con las fórmulas del prompt.
+    """
+    out: Dict[str, float] = {}
+    block = _find_block_resultado_final(text)
+
+    keys = ["VALOR_BASE", "AJUSTE_HORAS_%", "AJUSTE_ESTADO_%", "VALOR_MERCADO", "PRECIO_VENTA", "PRECIO_COMPRA"]
+    for k in keys:
+        v = _extract_int_line(block, k)
+        if v is not None:
+            out[k] = v
+
+    # Fallbacks calculados (evita "—")
+    vb = out.get("VALOR_BASE")
+    ah = out.get("AJUSTE_HORAS_%", 0.0)
+    ae = out.get("AJUSTE_ESTADO_%", 0.0)
+
+    if out.get("VALOR_MERCADO") is None and vb is not None:
+        vm = vb * (1.0 + ah / 100.0) * (1.0 + ae / 100.0)
+        out["VALOR_MERCADO"] = float(round(vm))
+
+    vm = out.get("VALOR_MERCADO")
+
+    if out.get("PRECIO_VENTA") is None and vm is not None:
+        out["PRECIO_VENTA"] = float(round(vm * 0.92))
+
+    if out.get("PRECIO_COMPRA") is None and vm is not None:
+        out["PRECIO_COMPRA"] = float(round(vm * 0.85))
+
+    return out
+
+
+# ------------------------------------------------------------
+# MOTOR AJUSTES (EXTRAS/APARTADOS)
+# ------------------------------------------------------------
+def calcular_ajustes_extras(draft: Dict[str, Any], coefs: Dict[str, Any]) -> Tuple[float, List[Tuple[str, float]]]:
+    cv = _parse_float(draft["cv"])
+    kg = _parse_float(draft.get("kg_contrapesos", 0) or 0)
+
+    vida_g = float(draft["vida_neum_grandes"])
+    vida_p = float(draft["vida_neum_pequenos"])
+
+    desglose: List[Tuple[str, float]] = []
+    total = 0.0
+
+    pala = bool(draft.get("extra_pala", False))
+    anclajes = bool(draft.get("extra_anclajes_pala", False))
+    trip = bool(draft.get("extra_tripuntal_del", False))
+    tdf = bool(draft.get("extra_tdf_del", False))
+    comp = bool(draft.get("extra_compresor", False))
+    autog = bool(draft.get("extra_autoguiado", False))
+
+    if pala:
+        v = float(coefs.get("pala_eur_por_cv", 0.0)) * cv
+        desglose.append(("Pala usada", v))
+        total += v
+        anclajes = False
+
+    if anclajes:
+        v = float(coefs.get("anclajes_eur_por_cv", 0.0)) * cv
+        desglose.append(("Anclajes de pala", v))
+        total += v
+
+    if tdf:
+        trip = True
+        v = float(coefs.get("tripuntal_tdf_eur_por_cv", 0.0)) * cv
+        desglose.append(("Tripuntal + TDF del.", v))
+        total += v
+    elif trip:
+        v = float(coefs.get("tripuntal_eur_por_cv", 0.0)) * cv
+        desglose.append(("Tripuntal del.", v))
+        total += v
+
+    if comp:
+        v = float(coefs.get("compresor_eur_fijo", 0.0))
+        desglose.append(("Compresor aire", v))
+        total += v
+
+    if autog:
+        v_cv = float(coefs.get("autoguiado_eur_por_cv", 0.0)) * cv
+        v_fx = float(coefs.get("autoguiado_eur_fijo", 0.0))
+        v = v_cv + v_fx
+        if v != 0:
+            desglose.append(("Autoguiado", v))
+            total += v
+
+    if kg > 0:
+        v = float(coefs.get("contrapesos_eur_por_kg", 0.0)) * kg
+        desglose.append((f"Contrapesos ({kg:.0f} kg)", v))
+        total += v
+
+    neu = coefs.get("neumaticos", {}) if isinstance(coefs.get("neumaticos", {}), dict) else {}
+    max_g = float(neu.get("max_grandes_eur_por_cv", 50.0))
+    max_p = float(neu.get("max_pequenos_eur_por_cv", 20.0))
+
+    penal_g = (1.0 - (vida_g / 100.0)) * max_g * cv
+    penal_p = (1.0 - (vida_p / 100.0)) * max_p * cv
+
+    if penal_g > 0:
+        desglose.append((f"Neumáticos grandes (vida {vida_g:.0f}%)", -penal_g))
+        total -= penal_g
+    if penal_p > 0:
+        desglose.append((f"Neumáticos pequeños (vida {vida_p:.0f}%)", -penal_p))
+        total -= penal_p
+
+    return total, desglose
+
+
+def fmt_eur(x: Optional[float]) -> str:
+    if x is None:
+        return "—"
+    return f"{x:,.0f} €".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def bloque_extras_texto(total_ajustes: float, items: List[Tuple[str, float]]) -> str:
+    lines = []
+    lines.append("[EXTRAS / AJUSTES (APARTE)]")
+    for concepto, importe in items:
+        sign = "+" if importe >= 0 else "-"
+        lines.append(f"- {concepto}: {sign}{fmt_eur(abs(importe))}")
+    lines.append(f"- TOTAL EXTRAS/APARTADOS: {fmt_eur(total_ajustes)}")
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------
+# VISTA ACCESO (tasadores)
+# ------------------------------------------------------------
+def vista_acceso():
     if os.path.exists("agricolanoroestelogo.jpg"):
         st.image("agricolanoroestelogo.jpg", width=320)
     else:
@@ -143,28 +445,72 @@ if not st.session_state["logged_in"]:
 
     st.subheader("Acceso de Tasadores")
 
-    vendedores = google_drive_manager.leer_vendedores(None if ES_CLOUD_RUN else CREDS) or []
-
-    with st.form("login"):
-        v_sel = st.selectbox("Selecciona tu nombre:", [""] + vendedores)
-        entrar = st.form_submit_button("Entrar", use_container_width=True)
-
-    if entrar:
-        if not v_sel:
-            st.error("Selecciona un nombre.")
-        else:
-            st.session_state["logged_in"] = True
-            st.session_state["vendedor"] = v_sel
+    c1, c2 = st.columns([3, 1])
+    with c2:
+        if st.button("🔄 Refrescar", use_container_width=True):
+            invalidate_vendedores_cache()
             st.rerun()
 
+    with st.spinner("Cargando tasadores..."):
+        vendedores = get_vendedores_cached(ENV_KEY)
+
+    t1, t2 = st.tabs(["Seleccionar", "Registrar nuevo"])
+
+    with t1:
+        with st.form("form_sel"):
+            v_sel = st.selectbox("Selecciona tu nombre:", [""] + vendedores, index=0)
+            entrar = st.form_submit_button("Entrar", use_container_width=True)
+        if entrar:
+            if not v_sel:
+                st.error("Selecciona un nombre.")
+            else:
+                st.session_state["logged_in"] = True
+                st.session_state["vendedor"] = v_sel
+                st.rerun()
+
+    with t2:
+        with st.form("form_reg", clear_on_submit=True):
+            nuevo = st.text_input("Nombre y Apellido del nuevo tasador:")
+            registrar = st.form_submit_button("Registrar y Entrar", use_container_width=True)
+
+        if registrar:
+            nombre = (nuevo or "").strip()
+            if len(nombre) < 2:
+                st.error("Introduce un nombre válido.")
+                return
+
+            if nombre in vendedores:
+                st.session_state["logged_in"] = True
+                st.session_state["vendedor"] = nombre
+                st.rerun()
+
+            creds = None if ES_CLOUD_RUN else CREDS
+            ok = google_drive_manager.actualizar_vendedores(creds, vendedores + [nombre])
+            if ok:
+                invalidate_vendedores_cache()
+                st.session_state["logged_in"] = True
+                st.session_state["vendedor"] = nombre
+                st.rerun()
+            else:
+                st.error("No se pudo escribir en vendedores.txt (permisos o archivo no encontrado).")
+
+
+# ------------------------------------------------------------
+# LOGIN
+# ------------------------------------------------------------
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+
+if not st.session_state["logged_in"]:
+    vista_acceso()
     st.stop()
 
-
-# ------------------------------------------------------------
-# A PARTIR DE AQUÍ: APP REAL
-# ------------------------------------------------------------
+# Branding + css (solo una vez logado)
 ocultar_chrome_streamlit()
 
+# ------------------------------------------------------------
+# HEADER (logo también en resultados)
+# ------------------------------------------------------------
 col_logo, col_controls = st.columns([6, 2])
 with col_logo:
     if os.path.exists("agricolanoroestelogo.jpg"):
@@ -174,8 +520,12 @@ with col_logo:
     st.markdown(f"### 🚜 {st.session_state.get('vendedor','')}")
 
 with col_controls:
+    if st.button("♻️ Recargar coeficientes", use_container_width=True):
+        invalidate_coef_cache()
+        st.rerun()
     if st.button("Salir", use_container_width=True):
-        st.session_state.clear()
+        for k in ["logged_in", "vendedor", "draft", "result", "uploader_fotos", "vertex_client"]:
+            st.session_state.pop(k, None)
         st.rerun()
 
 st.divider()
@@ -338,7 +688,6 @@ if "result" not in st.session_state:
                     fotos_pil = _state_to_pil_images(d["fotos_state"])
                     fotos_for_ai = fotos_up if fotos_up else _state_to_uploadlike(d["fotos_state"])
 
-                    # OJO: no metemos instrucción adicional en observaciones.
                     informe = ia_engine.realizar_peritaje(
                         st.session_state.vertex_client,
                         d["marca"],
@@ -420,9 +769,15 @@ if "result" in st.session_state:
         with r1:
             st.metric("Mercado + Extras", fmt_eur(float(base["VALOR_MERCADO"]) + extras_total))
         with r2:
-            st.metric("Venta + Extras", fmt_eur(float(base["PRECIO_VENTA"]) + extras_total) if base.get("PRECIO_VENTA") is not None else "—")
+            st.metric(
+                "Venta + Extras",
+                fmt_eur(float(base["PRECIO_VENTA"]) + extras_total) if base.get("PRECIO_VENTA") is not None else "—",
+            )
         with r3:
-            st.metric("Compra + Extras", fmt_eur(float(base["PRECIO_COMPRA"]) + extras_total) if base.get("PRECIO_COMPRA") is not None else "—")
+            st.metric(
+                "Compra + Extras",
+                fmt_eur(float(base["PRECIO_COMPRA"]) + extras_total) if base.get("PRECIO_COMPRA") is not None else "—",
+            )
 
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
