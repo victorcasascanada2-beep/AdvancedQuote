@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import io
+import re
 import base64
 from typing import List, Dict, Any, Tuple
 from PIL import Image
@@ -55,7 +56,6 @@ def get_creds():
 
 CREDS = get_creds()
 
-
 # ------------------------------------------------------------
 # COEFICIENTES (Drive)
 # ------------------------------------------------------------
@@ -82,7 +82,6 @@ def get_coeficientes_cached(env_key: str) -> Dict[str, Any]:
     coefs = google_drive_manager.leer_coeficientes(creds) or {}
 
     merged = dict(DEFAULT_COEFS)
-    # merge top-level
     for k, v in coefs.items():
         if k == "neumaticos" and isinstance(v, dict):
             merged_neu = dict(DEFAULT_COEFS["neumaticos"])
@@ -156,7 +155,7 @@ def _state_to_uploadlike(fotos_state) -> List[InMemoryUpload]:
 
 
 # ------------------------------------------------------------
-# VALIDACIÓN
+# PARSEOS / VALIDACIÓN / ESTIMACIÓN BASE
 # ------------------------------------------------------------
 def _is_blank(s: Any) -> bool:
     return s is None or str(s).strip() == ""
@@ -166,20 +165,72 @@ def _parse_float(value: Any) -> float:
     return float(str(value).replace(",", ".").strip())
 
 
+def parse_first_euro_number(text: str) -> float:
+    """
+    Extrae el primer número tipo '12.345,67' o '12345.67' o '12345' de un texto.
+    Devuelve float o lanza ValueError si no encuentra nada.
+    """
+    if not text:
+        raise ValueError("Texto vacío")
+
+    m = re.search(r"(\d{1,3}(?:[.\s]\d{3})*(?:,\d+)?|\d+(?:[.,]\d+)?)", text)
+    if not m:
+        raise ValueError("No se encontró número")
+
+    s = m.group(1).strip().replace(" ", "")
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    else:
+        if "," in s:
+            s = s.replace(",", ".")
+    return float(s)
+
+
+def detectar_desajuste_base(base_manual: float, base_estimado: float) -> str:
+    """
+    Warning si la diferencia es grande:
+      - > 15% y > 2500€
+    """
+    if base_manual <= 0 or base_estimado <= 0:
+        return ""
+
+    diff = abs(base_manual - base_estimado)
+    pct = diff / base_estimado
+
+    if diff > 2500 and pct > 0.15:
+        return (
+            f"⚠️ Desajuste grande: base manual {base_manual:,.0f}€ vs estimada {base_estimado:,.0f}€ "
+            f"(~{pct*100:.0f}%)."
+        )
+    return ""
+
+
 def validar_datos(draft: Dict[str, Any]) -> List[str]:
     errores: List[str] = []
 
-    for campo in ["marca", "modelo", "anio", "horas", "precio_base", "cv"]:
+    for campo in ["marca", "modelo", "anio", "horas", "cv"]:
         if _is_blank(draft.get(campo, "")):
             errores.append(f"El campo **{campo}** es obligatorio.")
+
+    # precio_base puede ser número o "ESTIMAR"
+    precio_base_raw = str(draft.get("precio_base", "")).strip()
+    if _is_blank(precio_base_raw):
+        errores.append("El campo **precio_base** es obligatorio (número o ESTIMAR).")
+    elif precio_base_raw.upper() != "ESTIMAR":
+        try:
+            x = _parse_float(precio_base_raw)
+            if x <= 0:
+                errores.append("El **precio base** debe ser mayor que 0.")
+        except Exception:
+            errores.append("El campo **precio_base** debe ser numérico o ESTIMAR.")
 
     # año
     anio = str(draft.get("anio", "")).strip()
     if anio and (not anio.isdigit() or len(anio) != 4):
         errores.append("El campo **año** debe ser un número de 4 dígitos (ej: 2022).")
 
-    # horas / cv / precio_base / kg
-    for campo_num in ["horas", "cv", "precio_base", "kg_contrapesos"]:
+    # horas / cv / kg
+    for campo_num in ["horas", "cv", "kg_contrapesos"]:
         val = str(draft.get(campo_num, "")).strip()
         if val == "":
             continue
@@ -207,24 +258,21 @@ def validar_datos(draft: Dict[str, Any]) -> List[str]:
 # ------------------------------------------------------------
 # MOTOR DE CÁLCULO
 # ------------------------------------------------------------
-def calcular_ajustes(draft: Dict[str, Any], coefs: Dict[str, Any]) -> Tuple[float, List[Tuple[str, float]]]:
+def calcular_precio_final_y_desglose(draft: Dict[str, Any], coefs: Dict[str, Any], precio_base_num: float) -> Tuple[float, List[Tuple[str, float]]]:
     """
     Devuelve:
-      - ajuste_total (positivo suma, negativo resta)
-      - desglose [(concepto, importe)]
+      - precio_final
+      - desglose [(concepto, importe)] donde importe puede ser + o -
     """
     cv = _parse_float(draft["cv"])
-    precio_base = _parse_float(draft["precio_base"])
     kg = _parse_float(draft.get("kg_contrapesos", 0) or 0)
 
-    # Vida útil 0..100
     vida_g = float(draft["vida_neum_grandes"])
     vida_p = float(draft["vida_neum_pequenos"])
 
     desglose: List[Tuple[str, float]] = []
     ajuste_total = 0.0
 
-    # --- EXTRAS ---
     pala = bool(draft.get("extra_pala", False))
     anclajes = bool(draft.get("extra_anclajes_pala", False))
     trip = bool(draft.get("extra_tripuntal_del", False))
@@ -237,20 +285,17 @@ def calcular_ajustes(draft: Dict[str, Any], coefs: Dict[str, Any]) -> Tuple[floa
         v = float(coefs.get("pala_eur_por_cv", 0.0)) * cv
         desglose.append(("Pala usada", v))
         ajuste_total += v
+        anclajes = False  # incluidos
 
-        # Pala incluye anclajes => anclajes no suma
-        # (aunque checkbox esté ON)
-        anclajes = False
-
-    # Anclajes (solo si NO hay pala)
+    # Anclajes (solo si NO pala)
     if anclajes:
         v = float(coefs.get("anclajes_eur_por_cv", 0.0)) * cv
         desglose.append(("Anclajes de pala", v))
         ajuste_total += v
 
-    # TDF fuerza tripuntal y aplica coef combinado
+    # TDF fuerza tripuntal: coef combinado
     if tdf:
-        trip = True  # forzado
+        trip = True
         v = float(coefs.get("tripuntal_tdf_eur_por_cv", 0.0)) * cv
         desglose.append(("Tripuntal + TDF del.", v))
         ajuste_total += v
@@ -265,7 +310,7 @@ def calcular_ajustes(draft: Dict[str, Any], coefs: Dict[str, Any]) -> Tuple[floa
         desglose.append(("Compresor aire", v))
         ajuste_total += v
 
-    # Autoguiado (si algún día lo configuras en el JSON)
+    # Autoguiado (si algún día lo configuras en JSON)
     if autog:
         v_cv = float(coefs.get("autoguiado_eur_por_cv", 0.0)) * cv
         v_fx = float(coefs.get("autoguiado_eur_fijo", 0.0))
@@ -280,12 +325,11 @@ def calcular_ajustes(draft: Dict[str, Any], coefs: Dict[str, Any]) -> Tuple[floa
         desglose.append((f"Contrapesos ({kg:.0f} kg)", v))
         ajuste_total += v
 
-    # --- NEUMÁTICOS: castigo lineal por vida útil ---
+    # Neumáticos: castigo lineal por vida útil
     neu = coefs.get("neumaticos", {}) if isinstance(coefs.get("neumaticos", {}), dict) else {}
     max_g = float(neu.get("max_grandes_eur_por_cv", 50.0))
     max_p = float(neu.get("max_pequenos_eur_por_cv", 20.0))
 
-    # Penalización: (1 - vida/100) * max * CV
     penal_g = (1.0 - (vida_g / 100.0)) * max_g * cv
     penal_p = (1.0 - (vida_p / 100.0)) * max_p * cv
 
@@ -296,24 +340,27 @@ def calcular_ajustes(draft: Dict[str, Any], coefs: Dict[str, Any]) -> Tuple[floa
         desglose.append((f"Neumáticos pequeños (vida {vida_p:.0f}%)", -penal_p))
         ajuste_total -= penal_p
 
-    # Precio base (solo para desglose externo, no suma al ajuste_total)
-    # Se usa fuera para calcular el final.
-
-    return precio_base + ajuste_total, desglose
+    precio_final = precio_base_num + ajuste_total
+    return precio_final, desglose
 
 
-def desglose_texto(precio_base: float, precio_final: float, items: List[Tuple[str, float]]) -> str:
-    """
-    Devuelve un bloque de texto para adjuntar a Observaciones/IA/HTML.
-    """
+def desglose_texto(precio_base: float, precio_final: float, items: List[Tuple[str, float]], base_estimado: float | None = None, aviso: str = "") -> str:
+    def fmt(x: float) -> str:
+        return f"{x:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
+
     lines = []
     lines.append("[AJUSTES ECONÓMICOS]")
-    lines.append(f"- Precio base: {precio_base:,.2f} €".replace(",", "X").replace(".", ",").replace("X", "."))
+    lines.append(f"- Precio base usado: {fmt(precio_base)}")
+    if base_estimado is not None:
+        lines.append(f"- Precio base estimado IA: {fmt(float(base_estimado))}")
+    if aviso:
+        lines.append(f"- AVISO: {aviso}")
+
     for concepto, importe in items:
         sign = "+" if importe >= 0 else "-"
-        val = abs(importe)
-        lines.append(f"- {concepto}: {sign}{val:,.2f} €".replace(",", "X").replace(".", ",").replace("X", "."))
-    lines.append(f"- Precio final: {precio_final:,.2f} €".replace(",", "X").replace(".", ",").replace("X", "."))
+        lines.append(f"- {concepto}: {sign}{fmt(abs(importe))}")
+
+    lines.append(f"- Precio final: {fmt(precio_final)}")
     return "\n".join(lines)
 
 
@@ -440,7 +487,8 @@ st.session_state.setdefault(
         "anio": "2025",
         "horas": "2500",
 
-        "precio_base": "",
+        # NUEVO: por defecto ESTIMAR
+        "precio_base": "ESTIMAR",
         "cv": "",
         "kg_contrapesos": "0",
 
@@ -451,13 +499,16 @@ st.session_state.setdefault(
         "obs": "",
         "fotos_state": [],
 
-        # Extras (checkboxes)
+        # Extras
         "extra_pala": False,
         "extra_anclajes_pala": False,
         "extra_tripuntal_del": False,
         "extra_tdf_del": False,
         "extra_compresor": False,
         "extra_autoguiado": False,
+
+        # runtime info
+        "precio_base_estimado": None,
     },
 )
 
@@ -500,6 +551,7 @@ if "result" not in st.session_state:
         colp1, colp2, colp3 = st.columns(3)
         with colp1:
             precio_base = st.text_input("Precio base (€) *", value=st.session_state["draft"]["precio_base"])
+            st.caption("Escribe un número o pon **ESTIMAR**.")
         with colp2:
             cv = st.text_input("CV *", value=st.session_state["draft"]["cv"])
         with colp3:
@@ -572,13 +624,73 @@ if "result" not in st.session_state:
         else:
             with st.spinner("Procesando tasación..."):
                 try:
-                    # Cálculo económico
-                    precio_base_num = _parse_float(d["precio_base"])
-                    precio_final, desglose_items = calcular_ajustes(d, COEFS)
+                    # -------------------------
+                    # 1) Determinar precio base
+                    # -------------------------
+                    precio_base_raw = str(d["precio_base"]).strip()
+                    modo_estimar = (precio_base_raw.upper() == "ESTIMAR")
 
-                    bloque_calc = desglose_texto(precio_base_num, precio_final, desglose_items)
+                    # Estimación IA:
+                    # - Siempre estimamos para poder avisar si hay desajuste grande
+                    hacer_estimacion = True
 
-                    # Observaciones para IA (incluye desglose)
+                    base_estimado = None
+                    msg_desajuste = ""
+
+                    if hacer_estimacion:
+                        try:
+                            prompt_estimacion = (
+                                "Devuelve ÚNICAMENTE el precio base estimado en euros (solo número). "
+                                "Sin texto, sin símbolos, sin explicaciones."
+                            )
+
+                            fotos_for_ai_est = fotos_up if fotos_up else _state_to_uploadlike(d["fotos_state"])
+
+                            resp_base = ia_engine.realizar_peritaje(
+                                st.session_state.vertex_client,
+                                d["marca"],
+                                d["modelo"],
+                                d["anio"],
+                                d["horas"],
+                                prompt_estimacion,
+                                fotos_for_ai_est,
+                            )
+                            base_estimado = parse_first_euro_number(resp_base)
+                        except Exception:
+                            base_estimado = None
+
+                    if modo_estimar:
+                        if base_estimado is None:
+                            st.error("No se pudo estimar el precio base automáticamente. Introduce un precio base manual.")
+                            st.stop()
+                        precio_base_num = float(base_estimado)
+                        d["precio_base"] = f"{precio_base_num:.0f}"
+                    else:
+                        precio_base_num = _parse_float(d["precio_base"])
+                        if base_estimado is not None:
+                            msg_desajuste = detectar_desajuste_base(precio_base_num, float(base_estimado))
+
+                    d["precio_base_estimado"] = base_estimado
+
+                    # -------------------------
+                    # 2) Calcular precio final
+                    # -------------------------
+                    precio_final, desglose_items = calcular_precio_final_y_desglose(d, COEFS, precio_base_num)
+
+                    bloque_calc = desglose_texto(
+                        precio_base=precio_base_num,
+                        precio_final=precio_final,
+                        items=desglose_items,
+                        base_estimado=base_estimado,
+                        aviso=msg_desajuste,
+                    )
+
+                    if msg_desajuste:
+                        st.warning(msg_desajuste)
+
+                    # -------------------------
+                    # 3) Observaciones para IA
+                    # -------------------------
                     obs_para_ia = (d["obs"] or "").strip()
                     obs_para_ia = (obs_para_ia + "\n\n" + bloque_calc).strip()
 
@@ -586,7 +698,7 @@ if "result" not in st.session_state:
                     fotos_pil = _state_to_pil_images(d["fotos_state"])
                     fotos_for_ai = fotos_up if fotos_up else _state_to_uploadlike(d["fotos_state"])
 
-                    # IA
+                    # IA final
                     inf = ia_engine.realizar_peritaje(
                         st.session_state.vertex_client,
                         d["marca"],
@@ -626,6 +738,9 @@ if "result" not in st.session_state:
                         "precio_final": precio_final,
                         "desglose": desglose_items,
                         "bloque_calc": bloque_calc,
+                        "base_estimado": base_estimado,
+                        "aviso": msg_desajuste,
+                        "base_usada": precio_base_num,
                     }
                     st.rerun()
 
