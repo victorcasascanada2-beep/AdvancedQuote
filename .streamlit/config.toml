@@ -1,1 +1,10 @@
 
+[theme]
+base = "light"
+
+primaryColor = "#3FA34D"              # verde acción
+backgroundColor = "#E6F2E6"           # fondo corporativo
+secondaryBackgroundColor = "#F3F8F3"  # tarjetas
+textColor = "#1F3D2B"                 # texto principal
+
+font = "sans serif"
