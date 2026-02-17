@@ -56,8 +56,45 @@ def get_creds():
 CREDS = get_creds()
 
 # ------------------------------------------------------------
-# FOTOS PERSISTENTES (borrador): Streamlit NO puede rellenar el uploader,
-# pero nosotros guardamos bytes y seguimos trabajando con ellas.
+# VALIDACIÓN
+# ------------------------------------------------------------
+def _is_blank(s: str) -> bool:
+    return (s is None) or (str(s).strip() == "")
+
+
+def validar_datos(draft: Dict[str, Any]) -> List[str]:
+    errores: List[str] = []
+
+    # Campos obligatorios
+    for campo in ["marca", "modelo", "anio", "horas"]:
+        if _is_blank(draft.get(campo, "")):
+            errores.append(f"El campo **{campo}** es obligatorio.")
+
+    # Validación mínima razonable
+    anio = str(draft.get("anio", "")).strip()
+    horas = str(draft.get("horas", "")).strip()
+
+    if anio and (not anio.isdigit() or len(anio) != 4):
+        errores.append("El campo **año** debe ser un número de 4 dígitos (ej: 2022).")
+
+    if horas:
+        try:
+            h = float(horas.replace(",", "."))
+            if h < 0:
+                errores.append("El campo **horas** no puede ser negativo.")
+        except Exception:
+            errores.append("El campo **horas** debe ser numérico.")
+
+    # Fotos obligatorias (mínimo 4)
+    fotos_state = draft.get("fotos_state") or []
+    if len(fotos_state) < 4:
+        errores.append("Debes subir **mínimo 4 fotos** para tasar.")
+
+    return errores
+
+
+# ------------------------------------------------------------
+# FOTOS PERSISTENTES (borrador)
 # ------------------------------------------------------------
 def _fotos_to_state(uploaded_files) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
@@ -189,15 +226,7 @@ with col_logo:
     st.markdown(f"### 🚜 {st.session_state.get('vendedor','')}")
 with col_logout:
     if st.button("Salir", use_container_width=True):
-        # Limpieza completa de sesión de usuario
-        for k in [
-            "logged_in",
-            "vendedor",
-            "draft",
-            "result",
-            "uploader_fotos",
-            "vertex_client",
-        ]:
+        for k in ["logged_in", "vendedor", "draft", "result", "uploader_fotos", "vertex_client"]:
             st.session_state.pop(k, None)
         st.rerun()
 
@@ -224,7 +253,7 @@ texto_ubicacion = (
 )
 
 # ------------------------------------------------------------
-# BORRADOR PERSISTENTE (NO se borra al volver a tasar)
+# BORRADOR PERSISTENTE
 # ------------------------------------------------------------
 st.session_state.setdefault(
     "draft",
@@ -234,87 +263,75 @@ st.session_state.setdefault(
         "anio": "2025",
         "horas": "2500",
         "obs": "",
-        "fotos_state": [],  # [{name,type,data(bytes)}]
+        "fotos_state": [],  # mínimo 4 para tasar
     },
 )
 
 # ------------------------------------------------------------
 # FORMULARIO / RESULTADOS
-# - result se borra con "Volver a tasar"
-# - draft (campos + fotos) se conserva
 # ------------------------------------------------------------
 if "result" not in st.session_state:
     st.subheader("Datos del Peritaje")
 
-    # Uploader: visualmente se verá vacío tras rerun (limitación Streamlit),
-    # pero nosotros conservamos fotos_state en draft.
     fotos_up = st.file_uploader(
-        "Subir fotos del tractor",
+        "Subir fotos del tractor (mínimo 4)",
         accept_multiple_files=True,
         type=["jpg", "jpeg", "png"],
         key="uploader_fotos",
     )
 
-    # Si hay fotos nuevas, actualizar borrador
     if fotos_up:
         st.session_state["draft"]["fotos_state"] = _fotos_to_state(fotos_up)
 
-    # Estado de fotos en borrador (evita confusión cuando el uploader está vacío)
-    if st.session_state["draft"]["fotos_state"]:
-        st.success(
-            f"✅ Fotos guardadas en memoria: {len(st.session_state['draft']['fotos_state'])} "
-            "(no hace falta volver a subir)"
-        )
-        cA, cB = st.columns([1, 1])
-        with cA:
-            if st.button("🗑️ Vaciar fotos guardadas", use_container_width=True):
-                st.session_state["draft"]["fotos_state"] = []
-                # también limpia el widget uploader (para que no “resucite” selección previa)
-                st.session_state.pop("uploader_fotos", None)
-                st.rerun()
-        with cB:
-            # mini preview de hasta 4 fotos
-            cols = st.columns(min(4, len(st.session_state["draft"]["fotos_state"])))
-            for i, item in enumerate(st.session_state["draft"]["fotos_state"][:4]):
-                try:
-                    img = Image.open(io.BytesIO(item["data"]))
-                    cols[i].image(img, use_container_width=True)
-                except Exception:
-                    pass
+    fotos_guardadas = st.session_state["draft"]["fotos_state"] or []
+    if fotos_guardadas:
+        st.success(f"✅ Fotos guardadas en memoria: {len(fotos_guardadas)} (mínimo 4)")
+        if st.button("🗑️ Vaciar fotos guardadas", use_container_width=True):
+            st.session_state["draft"]["fotos_state"] = []
+            st.session_state.pop("uploader_fotos", None)
+            st.rerun()
+
+        cols = st.columns(min(4, len(fotos_guardadas)))
+        for i, item in enumerate(fotos_guardadas[:4]):
+            try:
+                img = Image.open(io.BytesIO(item["data"]))
+                cols[i].image(img, use_container_width=True)
+            except Exception:
+                pass
     else:
         st.warning("⚠️ No hay fotos guardadas todavía. Súbelas para iniciar la tasación.")
 
     with st.form("form_peritaje", clear_on_submit=False):
         col1, col2 = st.columns(2)
         with col1:
-            marca = st.text_input("Marca", value=st.session_state["draft"]["marca"])
-            modelo = st.text_input("Modelo", value=st.session_state["draft"]["modelo"])
+            marca = st.text_input("Marca *", value=st.session_state["draft"]["marca"])
+            modelo = st.text_input("Modelo *", value=st.session_state["draft"]["modelo"])
         with col2:
-            anio = st.text_input("Año", value=st.session_state["draft"]["anio"])
-            horas = st.text_input("Horas", value=st.session_state["draft"]["horas"])
+            anio = st.text_input("Año *", value=st.session_state["draft"]["anio"])
+            horas = st.text_input("Horas *", value=st.session_state["draft"]["horas"])
 
         obs = st.text_area("Observaciones adicionales del perito", value=st.session_state["draft"]["obs"])
         submit = st.form_submit_button("🚀 INICIAR TASACIÓN Y GUARDAR", use_container_width=True)
 
     if submit:
-        # Persistir siempre el borrador al enviar
+        # Persistir borrador
         st.session_state["draft"]["marca"] = marca
         st.session_state["draft"]["modelo"] = modelo
         st.session_state["draft"]["anio"] = anio
         st.session_state["draft"]["horas"] = horas
         st.session_state["draft"]["obs"] = obs
 
-        if not st.session_state["draft"]["fotos_state"]:
-            st.error("Sube al menos una foto (o asegúrate de que hay fotos guardadas en memoria).")
+        errores = validar_datos(st.session_state["draft"])
+        if errores:
+            st.error("No se puede iniciar la tasación. Revisa:")
+            for e in errores:
+                st.markdown(f"- {e}")
         elif "vertex_client" not in st.session_state:
             st.error("El cliente de IA no está conectado.")
         else:
             with st.spinner("Procesando tasación..."):
                 try:
-                    # Para HTML
                     fotos_pil = _state_to_pil_images(st.session_state["draft"]["fotos_state"])
-
-                    # Para IA: usa uploader en esta ejecución si existe; si no, reconstruye desde bytes
                     fotos_for_ai = fotos_up if fotos_up else _state_to_uploadlike(st.session_state["draft"]["fotos_state"])
 
                     inf = ia_engine.realizar_peritaje(
@@ -353,7 +370,6 @@ if "result" not in st.session_state:
                         "nombre_archivo": nombre_fichero,
                         "id_archivo_drive": id_archivo,
                     }
-
                     st.rerun()
 
                 except Exception as e:
@@ -383,6 +399,5 @@ if "result" in st.session_state:
         )
     with col_btn2:
         if st.button("↩️ VOLVER A TASAR (mantener datos y fotos)", use_container_width=True):
-            # Solo borramos el resultado: el borrador queda intacto
             st.session_state.pop("result", None)
             st.rerun()
