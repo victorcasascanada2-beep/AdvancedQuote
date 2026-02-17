@@ -22,19 +22,84 @@ ENV_KEY = "cloud" if ES_CLOUD_RUN else "local"
 
 
 def ocultar_chrome_streamlit():
-    st.markdown(
-        """
-        <style>
-          header {visibility: hidden;}
-          footer {visibility: hidden;}
-          #MainMenu {visibility: hidden;}
-          [data-testid="stToolbar"] {visibility: hidden;}
-          [data-testid="stHeader"] {visibility: hidden;}
-          .block-container {padding-top: 1.2rem;}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+st.markdown("""
+<div class="hero">
+  <h1>🌱 Tasación de maquinaria</h1>
+  <p>Agrícola Noroeste · Valoración orientativa basada en estado, horas y mercado</p>
+</div>
+<style>
+.block-container {
+    max-width: 1100px;
+    padding-top: 1.8rem;
+    padding-bottom: 2.2rem;
+}
+
+/* Ocultar cromos Streamlit */
+#MainMenu, footer, header {visibility: hidden;}
+
+/* Hero / cabecera */
+.hero {
+  background: linear-gradient(
+    135deg,
+    rgba(63,163,77,.18),
+    rgba(125,186,58,.18)
+  );
+  border: 1px solid rgba(47,111,62,.25);
+  border-radius: 22px;
+  padding: 18px;
+  margin-bottom: 18px;
+}
+.hero h1 {
+  margin: 0;
+  color: #1F3D2B;
+}
+.hero p {
+  margin: 0;
+  color: #4F6F5B;
+}
+
+/* Cards */
+.card {
+  background: #F3F8F3;
+  border: 1px solid rgba(47,111,62,.18);
+  border-radius: 18px;
+  padding: 16px;
+}
+
+/* Inputs */
+div[data-baseweb="input"] input,
+div[data-baseweb="textarea"] textarea {
+  border-radius: 14px !important;
+  border: 1px solid rgba(47,111,62,.25) !important;
+}
+
+/* Botón principal */
+.stButton > button {
+  background: linear-gradient(135deg, #3FA34D, #7DBA3A) !important;
+  color: #ffffff !important;
+  border-radius: 14px !important;
+  border: none !important;
+  font-weight: 700 !important;
+  padding: 0.7rem 1.1rem !important;
+}
+.stButton > button:hover {
+  filter: brightness(1.05);
+  transform: translateY(-1px);
+}
+
+/* Pills / badges */
+.pill {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(63,163,77,.15);
+  border: 1px solid rgba(47,111,62,.25);
+  font-size: .85rem;
+  color: #1F3D2B;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 
 def get_creds():
