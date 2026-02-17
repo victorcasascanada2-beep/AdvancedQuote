@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import io
 import re
+import json
 import base64
 from typing import List, Dict, Any, Tuple
 from PIL import Image
@@ -167,8 +168,7 @@ def _parse_float(value: Any) -> float:
 
 def parse_first_euro_number(text: str) -> float:
     """
-    Extrae el primer número tipo '12.345,67' o '12345.67' o '12345' de un texto.
-    Devuelve float o lanza ValueError si no encuentra nada.
+    Fallback: extrae el primer número tipo '12.345,67' o '12345.67' o '12345' de un texto.
     """
     if not text:
         raise ValueError("Texto vacío")
@@ -184,6 +184,24 @@ def parse_first_euro_number(text: str) -> float:
         if "," in s:
             s = s.replace(",", ".")
     return float(s)
+
+
+def parse_precio_base_json(text: str) -> float:
+    """
+    Espera un JSON tipo: {"precio_base_eur": 12345}
+    Busca el primer bloque {...} y parsea.
+    """
+    if not text:
+        raise ValueError("Texto vacío")
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("No hay JSON")
+    obj = json.loads(text[start : end + 1])
+    val = obj.get("precio_base_eur", None)
+    if val is None:
+        raise ValueError("Falta precio_base_eur")
+    return float(val)
 
 
 def detectar_desajuste_base(base_manual: float, base_estimado: float) -> str:
@@ -258,7 +276,9 @@ def validar_datos(draft: Dict[str, Any]) -> List[str]:
 # ------------------------------------------------------------
 # MOTOR DE CÁLCULO
 # ------------------------------------------------------------
-def calcular_precio_final_y_desglose(draft: Dict[str, Any], coefs: Dict[str, Any], precio_base_num: float) -> Tuple[float, List[Tuple[str, float]]]:
+def calcular_precio_final_y_desglose(
+    draft: Dict[str, Any], coefs: Dict[str, Any], precio_base_num: float
+) -> Tuple[float, List[Tuple[str, float]]]:
     """
     Devuelve:
       - precio_final
@@ -344,7 +364,13 @@ def calcular_precio_final_y_desglose(draft: Dict[str, Any], coefs: Dict[str, Any
     return precio_final, desglose
 
 
-def desglose_texto(precio_base: float, precio_final: float, items: List[Tuple[str, float]], base_estimado: float | None = None, aviso: str = "") -> str:
+def desglose_texto(
+    precio_base: float,
+    precio_final: float,
+    items: List[Tuple[str, float]],
+    base_estimado: float | None = None,
+    aviso: str = "",
+) -> str:
     def fmt(x: float) -> str:
         return f"{x:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -486,28 +512,19 @@ st.session_state.setdefault(
         "modelo": "G125",
         "anio": "2025",
         "horas": "2500",
-
-        # NUEVO: por defecto ESTIMAR
-        "precio_base": "ESTIMAR",
+        "precio_base": "ESTIMAR",  # por defecto
         "cv": "",
         "kg_contrapesos": "0",
-
-        # Vida útil (0..100)
         "vida_neum_grandes": "",
         "vida_neum_pequenos": "",
-
         "obs": "",
         "fotos_state": [],
-
-        # Extras
         "extra_pala": False,
         "extra_anclajes_pala": False,
         "extra_tripuntal_del": False,
         "extra_tdf_del": False,
         "extra_compresor": False,
         "extra_autoguiado": False,
-
-        # runtime info
         "precio_base_estimado": None,
     },
 )
@@ -593,7 +610,6 @@ if "result" not in st.session_state:
         submit = st.form_submit_button("🚀 INICIAR TASACIÓN Y GUARDAR", use_container_width=True)
 
     if submit:
-        # Persistir borrador
         d = st.session_state["draft"]
         d["marca"] = marca
         d["modelo"] = modelo
@@ -625,23 +641,24 @@ if "result" not in st.session_state:
             with st.spinner("Procesando tasación..."):
                 try:
                     # -------------------------
-                    # 1) Determinar precio base
+                    # 1) Estimar precio base (JSON) o usar manual + avisar
                     # -------------------------
                     precio_base_raw = str(d["precio_base"]).strip()
                     modo_estimar = (precio_base_raw.upper() == "ESTIMAR")
 
-                    # Estimación IA:
-                    # - Siempre estimamos para poder avisar si hay desajuste grande
+                    # Estimamos SIEMPRE para poder avisar si hay desajuste (puedes cambiarlo a modo_estimar)
                     hacer_estimacion = True
 
                     base_estimado = None
-                    msg_desajuste = ""
+                    aviso = ""
 
                     if hacer_estimacion:
                         try:
                             prompt_estimacion = (
-                                "Devuelve ÚNICAMENTE el precio base estimado en euros (solo número). "
-                                "Sin texto, sin símbolos, sin explicaciones."
+                                'Devuelve EXCLUSIVAMENTE un JSON válido (sin texto adicional).\n'
+                                'Formato: {"precio_base_eur": 12345}\n'
+                                "- Solo un número entero en euros.\n"
+                                "- Sin símbolos, sin separadores de miles.\n"
                             )
 
                             fotos_for_ai_est = fotos_up if fotos_up else _state_to_uploadlike(d["fotos_state"])
@@ -655,7 +672,16 @@ if "result" not in st.session_state:
                                 prompt_estimacion,
                                 fotos_for_ai_est,
                             )
-                            base_estimado = parse_first_euro_number(resp_base)
+
+                            try:
+                                base_estimado = parse_precio_base_json(resp_base)
+                            except Exception:
+                                # fallback (por si el modelo no devuelve JSON estricto)
+                                base_estimado = parse_first_euro_number(resp_base)
+
+                            # guardrail: evitar "1", "2025", etc.
+                            if base_estimado is not None and base_estimado < 1000:
+                                base_estimado = None
                         except Exception:
                             base_estimado = None
 
@@ -664,16 +690,18 @@ if "result" not in st.session_state:
                             st.error("No se pudo estimar el precio base automáticamente. Introduce un precio base manual.")
                             st.stop()
                         precio_base_num = float(base_estimado)
-                        d["precio_base"] = f"{precio_base_num:.0f}"
+                        d["precio_base"] = f"{precio_base_num:.0f}"  # fijamos base usada
                     else:
                         precio_base_num = _parse_float(d["precio_base"])
                         if base_estimado is not None:
-                            msg_desajuste = detectar_desajuste_base(precio_base_num, float(base_estimado))
+                            aviso = detectar_desajuste_base(precio_base_num, float(base_estimado))
+                            if aviso:
+                                st.warning(aviso)
 
                     d["precio_base_estimado"] = base_estimado
 
                     # -------------------------
-                    # 2) Calcular precio final
+                    # 2) Calcular precio final + desglose
                     # -------------------------
                     precio_final, desglose_items = calcular_precio_final_y_desglose(d, COEFS, precio_base_num)
 
@@ -682,14 +710,11 @@ if "result" not in st.session_state:
                         precio_final=precio_final,
                         items=desglose_items,
                         base_estimado=base_estimado,
-                        aviso=msg_desajuste,
+                        aviso=aviso,
                     )
 
-                    if msg_desajuste:
-                        st.warning(msg_desajuste)
-
                     # -------------------------
-                    # 3) Observaciones para IA
+                    # 3) Observaciones para IA (incluye desglose)
                     # -------------------------
                     obs_para_ia = (d["obs"] or "").strip()
                     obs_para_ia = (obs_para_ia + "\n\n" + bloque_calc).strip()
@@ -735,12 +760,7 @@ if "result" not in st.session_state:
                         "html": html,
                         "nombre_archivo": nombre_fichero,
                         "id_archivo_drive": id_archivo,
-                        "precio_final": precio_final,
-                        "desglose": desglose_items,
                         "bloque_calc": bloque_calc,
-                        "base_estimado": base_estimado,
-                        "aviso": msg_desajuste,
-                        "base_usada": precio_base_num,
                     }
                     st.rerun()
 
