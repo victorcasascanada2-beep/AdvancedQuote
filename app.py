@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import io
 import base64
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from PIL import Image
 
 import ia_engine
@@ -55,49 +55,69 @@ def get_creds():
 
 CREDS = get_creds()
 
-# ------------------------------------------------------------
-# VALIDACIÓN
-# ------------------------------------------------------------
-def _is_blank(s: str) -> bool:
-    return (s is None) or (str(s).strip() == "")
-
-
-def validar_datos(draft: Dict[str, Any]) -> List[str]:
-    errores: List[str] = []
-
-    for campo in ["marca", "modelo", "anio", "horas"]:
-        if _is_blank(draft.get(campo, "")):
-            errores.append(f"El campo **{campo}** es obligatorio.")
-
-    anio = str(draft.get("anio", "")).strip()
-    horas = str(draft.get("horas", "")).strip()
-
-    if anio and (not anio.isdigit() or len(anio) != 4):
-        errores.append("El campo **año** debe ser un número de 4 dígitos (ej: 2022).")
-
-    if horas:
-        try:
-            h = float(horas.replace(",", "."))
-            if h < 0:
-                errores.append("El campo **horas** no puede ser negativo.")
-        except Exception:
-            errores.append("El campo **horas** debe ser numérico.")
-
-    fotos_state = draft.get("fotos_state") or []
-    if len(fotos_state) < 4:
-        errores.append("Debes subir **mínimo 4 fotos** para tasar.")
-
-    # Desgaste obligatorio (si quieres que sea obligatorio)
-    if _is_blank(draft.get("desgaste_del", "")):
-        errores.append("Selecciona el **% de desgaste de ruedas delanteras**.")
-    if _is_blank(draft.get("desgaste_tras", "")):
-        errores.append("Selecciona el **% de desgaste de ruedas traseras**.")
-
-    return errores
-
 
 # ------------------------------------------------------------
-# FOTOS PERSISTENTES (borrador)
+# COEFICIENTES (Drive)
+# ------------------------------------------------------------
+DEFAULT_COEFS = {
+    "pala_eur_por_cv": 41.6,
+    "anclajes_eur_por_cv": 16.6,
+    "tripuntal_eur_por_cv": 20.8,
+    "tripuntal_tdf_eur_por_cv": 25.0,
+    "compresor_eur_fijo": 1000.0,
+    "contrapesos_eur_por_kg": 1.0,
+    "neumaticos": {
+        "max_grandes_eur_por_cv": 50.0,
+        "max_pequenos_eur_por_cv": 20.0,
+    },
+    # opcional si algún día lo metes en el JSON
+    "autoguiado_eur_por_cv": 0.0,
+    "autoguiado_eur_fijo": 0.0,
+}
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_coeficientes_cached(env_key: str) -> Dict[str, Any]:
+    creds = None if env_key == "cloud" else CREDS
+    coefs = google_drive_manager.leer_coeficientes(creds) or {}
+
+    merged = dict(DEFAULT_COEFS)
+    # merge top-level
+    for k, v in coefs.items():
+        if k == "neumaticos" and isinstance(v, dict):
+            merged_neu = dict(DEFAULT_COEFS["neumaticos"])
+            merged_neu.update(v)
+            merged["neumaticos"] = merged_neu
+        else:
+            merged[k] = v
+    return merged
+
+
+def invalidate_coef_cache():
+    try:
+        get_coeficientes_cached.clear()
+    except Exception:
+        pass
+
+
+# ------------------------------------------------------------
+# VENDEDORES (Drive)
+# ------------------------------------------------------------
+@st.cache_data(ttl=30, show_spinner=False)
+def get_vendedores_cached(env_key: str) -> List[str]:
+    creds = None if env_key == "cloud" else CREDS
+    return google_drive_manager.leer_vendedores(creds) or []
+
+
+def invalidate_vendedores_cache():
+    try:
+        get_vendedores_cached.clear()
+    except Exception:
+        pass
+
+
+# ------------------------------------------------------------
+# HELPERS FOTOS (persistentes en session_state)
 # ------------------------------------------------------------
 def _fotos_to_state(uploaded_files) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
@@ -136,21 +156,170 @@ def _state_to_uploadlike(fotos_state) -> List[InMemoryUpload]:
 
 
 # ------------------------------------------------------------
-# VENDEDORES (Drive) cacheado por entorno (cloud/local)
+# VALIDACIÓN
 # ------------------------------------------------------------
-@st.cache_data(ttl=30, show_spinner=False)
-def get_vendedores_cached(env_key: str) -> List[str]:
-    creds = None if env_key == "cloud" else CREDS
-    return google_drive_manager.leer_vendedores(creds) or []
+def _is_blank(s: Any) -> bool:
+    return s is None or str(s).strip() == ""
 
 
-def invalidate_vendedores_cache():
-    try:
-        get_vendedores_cached.clear()
-    except Exception:
-        pass
+def _parse_float(value: Any) -> float:
+    return float(str(value).replace(",", ".").strip())
 
 
+def validar_datos(draft: Dict[str, Any]) -> List[str]:
+    errores: List[str] = []
+
+    for campo in ["marca", "modelo", "anio", "horas", "precio_base", "cv"]:
+        if _is_blank(draft.get(campo, "")):
+            errores.append(f"El campo **{campo}** es obligatorio.")
+
+    # año
+    anio = str(draft.get("anio", "")).strip()
+    if anio and (not anio.isdigit() or len(anio) != 4):
+        errores.append("El campo **año** debe ser un número de 4 dígitos (ej: 2022).")
+
+    # horas / cv / precio_base / kg
+    for campo_num in ["horas", "cv", "precio_base", "kg_contrapesos"]:
+        val = str(draft.get(campo_num, "")).strip()
+        if val == "":
+            continue
+        try:
+            x = _parse_float(val)
+            if x < 0:
+                errores.append(f"El campo **{campo_num}** no puede ser negativo.")
+        except Exception:
+            errores.append(f"El campo **{campo_num}** debe ser numérico.")
+
+    # fotos
+    fotos_state = draft.get("fotos_state") or []
+    if len(fotos_state) < 4:
+        errores.append("Debes subir **mínimo 4 fotos** para tasar.")
+
+    # vida neumáticos (obligatorio)
+    if _is_blank(draft.get("vida_neum_grandes", "")):
+        errores.append("Selecciona la **vida útil neumáticos grandes (%)**.")
+    if _is_blank(draft.get("vida_neum_pequenos", "")):
+        errores.append("Selecciona la **vida útil neumáticos pequeños (%)**.")
+
+    return errores
+
+
+# ------------------------------------------------------------
+# MOTOR DE CÁLCULO
+# ------------------------------------------------------------
+def calcular_ajustes(draft: Dict[str, Any], coefs: Dict[str, Any]) -> Tuple[float, List[Tuple[str, float]]]:
+    """
+    Devuelve:
+      - ajuste_total (positivo suma, negativo resta)
+      - desglose [(concepto, importe)]
+    """
+    cv = _parse_float(draft["cv"])
+    precio_base = _parse_float(draft["precio_base"])
+    kg = _parse_float(draft.get("kg_contrapesos", 0) or 0)
+
+    # Vida útil 0..100
+    vida_g = float(draft["vida_neum_grandes"])
+    vida_p = float(draft["vida_neum_pequenos"])
+
+    desglose: List[Tuple[str, float]] = []
+    ajuste_total = 0.0
+
+    # --- EXTRAS ---
+    pala = bool(draft.get("extra_pala", False))
+    anclajes = bool(draft.get("extra_anclajes_pala", False))
+    trip = bool(draft.get("extra_tripuntal_del", False))
+    tdf = bool(draft.get("extra_tdf_del", False))
+    comp = bool(draft.get("extra_compresor", False))
+    autog = bool(draft.get("extra_autoguiado", False))
+
+    # Pala
+    if pala:
+        v = float(coefs.get("pala_eur_por_cv", 0.0)) * cv
+        desglose.append(("Pala usada", v))
+        ajuste_total += v
+
+        # Pala incluye anclajes => anclajes no suma
+        # (aunque checkbox esté ON)
+        anclajes = False
+
+    # Anclajes (solo si NO hay pala)
+    if anclajes:
+        v = float(coefs.get("anclajes_eur_por_cv", 0.0)) * cv
+        desglose.append(("Anclajes de pala", v))
+        ajuste_total += v
+
+    # TDF fuerza tripuntal y aplica coef combinado
+    if tdf:
+        trip = True  # forzado
+        v = float(coefs.get("tripuntal_tdf_eur_por_cv", 0.0)) * cv
+        desglose.append(("Tripuntal + TDF del.", v))
+        ajuste_total += v
+    elif trip:
+        v = float(coefs.get("tripuntal_eur_por_cv", 0.0)) * cv
+        desglose.append(("Tripuntal del.", v))
+        ajuste_total += v
+
+    # Compresor fijo
+    if comp:
+        v = float(coefs.get("compresor_eur_fijo", 0.0))
+        desglose.append(("Compresor aire", v))
+        ajuste_total += v
+
+    # Autoguiado (si algún día lo configuras en el JSON)
+    if autog:
+        v_cv = float(coefs.get("autoguiado_eur_por_cv", 0.0)) * cv
+        v_fx = float(coefs.get("autoguiado_eur_fijo", 0.0))
+        v = v_cv + v_fx
+        if v != 0:
+            desglose.append(("Autoguiado", v))
+            ajuste_total += v
+
+    # Contrapesos €/kg
+    if kg > 0:
+        v = float(coefs.get("contrapesos_eur_por_kg", 0.0)) * kg
+        desglose.append((f"Contrapesos ({kg:.0f} kg)", v))
+        ajuste_total += v
+
+    # --- NEUMÁTICOS: castigo lineal por vida útil ---
+    neu = coefs.get("neumaticos", {}) if isinstance(coefs.get("neumaticos", {}), dict) else {}
+    max_g = float(neu.get("max_grandes_eur_por_cv", 50.0))
+    max_p = float(neu.get("max_pequenos_eur_por_cv", 20.0))
+
+    # Penalización: (1 - vida/100) * max * CV
+    penal_g = (1.0 - (vida_g / 100.0)) * max_g * cv
+    penal_p = (1.0 - (vida_p / 100.0)) * max_p * cv
+
+    if penal_g > 0:
+        desglose.append((f"Neumáticos grandes (vida {vida_g:.0f}%)", -penal_g))
+        ajuste_total -= penal_g
+    if penal_p > 0:
+        desglose.append((f"Neumáticos pequeños (vida {vida_p:.0f}%)", -penal_p))
+        ajuste_total -= penal_p
+
+    # Precio base (solo para desglose externo, no suma al ajuste_total)
+    # Se usa fuera para calcular el final.
+
+    return precio_base + ajuste_total, desglose
+
+
+def desglose_texto(precio_base: float, precio_final: float, items: List[Tuple[str, float]]) -> str:
+    """
+    Devuelve un bloque de texto para adjuntar a Observaciones/IA/HTML.
+    """
+    lines = []
+    lines.append("[AJUSTES ECONÓMICOS]")
+    lines.append(f"- Precio base: {precio_base:,.2f} €".replace(",", "X").replace(".", ",").replace("X", "."))
+    for concepto, importe in items:
+        sign = "+" if importe >= 0 else "-"
+        val = abs(importe)
+        lines.append(f"- {concepto}: {sign}{val:,.2f} €".replace(",", "X").replace(".", ",").replace("X", "."))
+    lines.append(f"- Precio final: {precio_final:,.2f} €".replace(",", "X").replace(".", ",").replace("X", "."))
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------
+# VISTA ACCESO (tasadores)
+# ------------------------------------------------------------
 def vista_acceso():
     if os.path.exists("agricolanoroestelogo.jpg"):
         st.image("agricolanoroestelogo.jpg", width=320)
@@ -224,16 +393,21 @@ ocultar_chrome_streamlit()
 # ------------------------------------------------------------
 # HEADER
 # ------------------------------------------------------------
-col_logo, col_logout = st.columns([6, 1])
+col_logo, col_controls = st.columns([6, 2])
 with col_logo:
     st.markdown(f"### 🚜 {st.session_state.get('vendedor','')}")
-with col_logout:
+with col_controls:
+    if st.button("♻️ Recargar coeficientes", use_container_width=True):
+        invalidate_coef_cache()
+        st.rerun()
     if st.button("Salir", use_container_width=True):
         for k in ["logged_in", "vendedor", "draft", "result", "uploader_fotos", "vertex_client"]:
             st.session_state.pop(k, None)
         st.rerun()
 
 st.divider()
+
+COEFS = get_coeficientes_cached(ENV_KEY)
 
 # ------------------------------------------------------------
 # CONEXIÓN IA (doble ejecución intacta)
@@ -256,7 +430,7 @@ texto_ubicacion = (
 )
 
 # ------------------------------------------------------------
-# BORRADOR PERSISTENTE (incluye extras + desgastes)
+# BORRADOR PERSISTENTE (incluye extras + vida neumáticos + base/cv/kg)
 # ------------------------------------------------------------
 st.session_state.setdefault(
     "draft",
@@ -265,14 +439,19 @@ st.session_state.setdefault(
         "modelo": "G125",
         "anio": "2025",
         "horas": "2500",
+
+        "precio_base": "",
+        "cv": "",
+        "kg_contrapesos": "0",
+
+        # Vida útil (0..100)
+        "vida_neum_grandes": "",
+        "vida_neum_pequenos": "",
+
         "obs": "",
         "fotos_state": [],
 
-        # NUEVO: desgaste ruedas
-        "desgaste_del": "50%",
-        "desgaste_tras": "50%",
-
-        # NUEVO: extras (checkboxes)
+        # Extras (checkboxes)
         "extra_pala": False,
         "extra_anclajes_pala": False,
         "extra_tripuntal_del": False,
@@ -282,8 +461,7 @@ st.session_state.setdefault(
     },
 )
 
-# Opciones para desplegables
-OPC_DESGASTE = ["", "0%", "10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%", "100%"]
+OPC_VIDA = [""] + [str(x) for x in range(0, 101, 10)]
 
 # ------------------------------------------------------------
 # FORMULARIO / RESULTADOS
@@ -297,7 +475,6 @@ if "result" not in st.session_state:
         type=["jpg", "jpeg", "png"],
         key="uploader_fotos",
     )
-
     if fotos_up:
         st.session_state["draft"]["fotos_state"] = _fotos_to_state(fotos_up)
 
@@ -308,14 +485,6 @@ if "result" not in st.session_state:
             st.session_state["draft"]["fotos_state"] = []
             st.session_state.pop("uploader_fotos", None)
             st.rerun()
-
-        cols = st.columns(min(4, len(fotos_guardadas)))
-        for i, item in enumerate(fotos_guardadas[:4]):
-            try:
-                img = Image.open(io.BytesIO(item["data"]))
-                cols[i].image(img, use_container_width=True)
-            except Exception:
-                pass
     else:
         st.warning("⚠️ No hay fotos guardadas todavía. Súbelas para iniciar la tasación.")
 
@@ -327,6 +496,14 @@ if "result" not in st.session_state:
         with col2:
             anio = st.text_input("Año *", value=st.session_state["draft"]["anio"])
             horas = st.text_input("Horas *", value=st.session_state["draft"]["horas"])
+
+        colp1, colp2, colp3 = st.columns(3)
+        with colp1:
+            precio_base = st.text_input("Precio base (€) *", value=st.session_state["draft"]["precio_base"])
+        with colp2:
+            cv = st.text_input("CV *", value=st.session_state["draft"]["cv"])
+        with colp3:
+            kg_contrapesos = st.text_input("Kg contrapesos", value=st.session_state["draft"]["kg_contrapesos"])
 
         obs = st.text_area("Observaciones adicionales del perito", value=st.session_state["draft"]["obs"])
 
@@ -342,22 +519,22 @@ if "result" not in st.session_state:
             extra_compresor = st.checkbox("Compresor", value=st.session_state["draft"]["extra_compresor"])
             extra_autoguiado = st.checkbox("Autoguiado", value=st.session_state["draft"]["extra_autoguiado"])
 
-        st.markdown("#### Desgaste de ruedas")
-        d1, d2 = st.columns(2)
-        with d1:
-            desgaste_del = st.selectbox(
-                "% desgaste ruedas delanteras *",
-                options=OPC_DESGASTE,
-                index=OPC_DESGASTE.index(st.session_state["draft"]["desgaste_del"])
-                if st.session_state["draft"]["desgaste_del"] in OPC_DESGASTE
+        st.markdown("#### Vida útil neumáticos")
+        n1, n2 = st.columns(2)
+        with n1:
+            vida_neum_grandes = st.selectbox(
+                "Vida útil neumáticos grandes (%) *",
+                options=OPC_VIDA,
+                index=OPC_VIDA.index(str(st.session_state["draft"]["vida_neum_grandes"]))
+                if str(st.session_state["draft"]["vida_neum_grandes"]) in OPC_VIDA
                 else 0,
             )
-        with d2:
-            desgaste_tras = st.selectbox(
-                "% desgaste ruedas traseras *",
-                options=OPC_DESGASTE,
-                index=OPC_DESGASTE.index(st.session_state["draft"]["desgaste_tras"])
-                if st.session_state["draft"]["desgaste_tras"] in OPC_DESGASTE
+        with n2:
+            vida_neum_pequenos = st.selectbox(
+                "Vida útil neumáticos pequeños (%) *",
+                options=OPC_VIDA,
+                index=OPC_VIDA.index(str(st.session_state["draft"]["vida_neum_pequenos"]))
+                if str(st.session_state["draft"]["vida_neum_pequenos"]) in OPC_VIDA
                 else 0,
             )
 
@@ -365,23 +542,27 @@ if "result" not in st.session_state:
 
     if submit:
         # Persistir borrador
-        st.session_state["draft"]["marca"] = marca
-        st.session_state["draft"]["modelo"] = modelo
-        st.session_state["draft"]["anio"] = anio
-        st.session_state["draft"]["horas"] = horas
-        st.session_state["draft"]["obs"] = obs
+        d = st.session_state["draft"]
+        d["marca"] = marca
+        d["modelo"] = modelo
+        d["anio"] = anio
+        d["horas"] = horas
+        d["precio_base"] = precio_base
+        d["cv"] = cv
+        d["kg_contrapesos"] = kg_contrapesos
+        d["obs"] = obs
 
-        st.session_state["draft"]["extra_pala"] = extra_pala
-        st.session_state["draft"]["extra_anclajes_pala"] = extra_anclajes_pala
-        st.session_state["draft"]["extra_tripuntal_del"] = extra_tripuntal_del
-        st.session_state["draft"]["extra_tdf_del"] = extra_tdf_del
-        st.session_state["draft"]["extra_compresor"] = extra_compresor
-        st.session_state["draft"]["extra_autoguiado"] = extra_autoguiado
+        d["extra_pala"] = extra_pala
+        d["extra_anclajes_pala"] = extra_anclajes_pala
+        d["extra_tripuntal_del"] = extra_tripuntal_del
+        d["extra_tdf_del"] = extra_tdf_del
+        d["extra_compresor"] = extra_compresor
+        d["extra_autoguiado"] = extra_autoguiado
 
-        st.session_state["draft"]["desgaste_del"] = desgaste_del
-        st.session_state["draft"]["desgaste_tras"] = desgaste_tras
+        d["vida_neum_grandes"] = vida_neum_grandes
+        d["vida_neum_pequenos"] = vida_neum_pequenos
 
-        errores = validar_datos(st.session_state["draft"])
+        errores = validar_datos(d)
         if errores:
             st.error("No se puede iniciar la tasación. Revisa:")
             for e in errores:
@@ -391,53 +572,42 @@ if "result" not in st.session_state:
         else:
             with st.spinner("Procesando tasación..."):
                 try:
-                    # Construir un resumen de extras/desgaste para pasarlo a la IA dentro de 'obs'
-                    extras_activos = []
-                    if st.session_state["draft"]["extra_pala"]:
-                        extras_activos.append("Pala")
-                    if st.session_state["draft"]["extra_anclajes_pala"]:
-                        extras_activos.append("Anclajes de pala")
-                    if st.session_state["draft"]["extra_tripuntal_del"]:
-                        extras_activos.append("Tripuntal delantero")
-                    if st.session_state["draft"]["extra_tdf_del"]:
-                        extras_activos.append("TDF delantero")
-                    if st.session_state["draft"]["extra_compresor"]:
-                        extras_activos.append("Compresor")
-                    if st.session_state["draft"]["extra_autoguiado"]:
-                        extras_activos.append("Autoguiado")
+                    # Cálculo económico
+                    precio_base_num = _parse_float(d["precio_base"])
+                    precio_final, desglose_items = calcular_ajustes(d, COEFS)
 
-                    bloque_extras = (
-                        "\n\n[EXTRAS Y RUEDAS]\n"
-                        f"- Extras: {', '.join(extras_activos) if extras_activos else 'Ninguno'}\n"
-                        f"- Desgaste ruedas delanteras: {st.session_state['draft']['desgaste_del']}\n"
-                        f"- Desgaste ruedas traseras: {st.session_state['draft']['desgaste_tras']}\n"
-                    )
+                    bloque_calc = desglose_texto(precio_base_num, precio_final, desglose_items)
 
-                    obs_para_ia = (st.session_state["draft"]["obs"] or "") + bloque_extras
+                    # Observaciones para IA (incluye desglose)
+                    obs_para_ia = (d["obs"] or "").strip()
+                    obs_para_ia = (obs_para_ia + "\n\n" + bloque_calc).strip()
 
-                    fotos_pil = _state_to_pil_images(st.session_state["draft"]["fotos_state"])
-                    fotos_for_ai = fotos_up if fotos_up else _state_to_uploadlike(st.session_state["draft"]["fotos_state"])
+                    # Fotos
+                    fotos_pil = _state_to_pil_images(d["fotos_state"])
+                    fotos_for_ai = fotos_up if fotos_up else _state_to_uploadlike(d["fotos_state"])
 
+                    # IA
                     inf = ia_engine.realizar_peritaje(
                         st.session_state.vertex_client,
-                        st.session_state["draft"]["marca"],
-                        st.session_state["draft"]["modelo"],
-                        st.session_state["draft"]["anio"],
-                        st.session_state["draft"]["horas"],
+                        d["marca"],
+                        d["modelo"],
+                        d["anio"],
+                        d["horas"],
                         obs_para_ia,
                         fotos_for_ai,
                     )
 
+                    # HTML
                     ref_b64 = base64.b64encode(texto_ubicacion.encode("utf-8")).decode("utf-8")
                     html = html_generator.generar_informe_html(
-                        st.session_state["draft"]["marca"],
-                        st.session_state["draft"]["modelo"],
+                        d["marca"],
+                        d["modelo"],
                         inf,
                         fotos_pil,
                         ref_b64,
                     )
 
-                    nombre_fichero = f"Tasacion_{st.session_state['draft']['marca']}_{st.session_state['draft']['modelo']}.html"
+                    nombre_fichero = f"Tasacion_{d['marca']}_{d['modelo']}.html"
                     carpeta = st.session_state.get("vendedor", "General")
                     creds_drive = None if ES_CLOUD_RUN else CREDS
 
@@ -453,6 +623,9 @@ if "result" not in st.session_state:
                         "html": html,
                         "nombre_archivo": nombre_fichero,
                         "id_archivo_drive": id_archivo,
+                        "precio_final": precio_final,
+                        "desglose": desglose_items,
+                        "bloque_calc": bloque_calc,
                     }
                     st.rerun()
 
@@ -469,8 +642,11 @@ if "result" in st.session_state:
         st.success("✅ Peritaje finalizado.")
         st.warning("⚠️ No se recibió ID de Drive (permisos/archivo).")
 
-    st.markdown("### Resultado del Análisis")
+    st.markdown("### Resultado del Análisis (IA)")
     st.markdown(res["informe_final"])
+
+    st.markdown("### Desglose económico")
+    st.code(res["bloque_calc"])
 
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
