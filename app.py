@@ -342,7 +342,7 @@ col_logo, col_controls = st.columns([6, 2])
 with col_logo:
     if os.path.exists("Transparente.png"): st.image("Transparente.png", width=220)
     else: st.markdown("### Agrícola Noroeste")
-    st.markdown(f"### 🚜 {st.session_state.get('vendedor','')}")
+    st.markdown(f"### 🤝🚜 {st.session_state.get('vendedor','')}")
 with col_controls:
     if st.button("♻️ Recargar coeficientes", use_container_width=True): invalidate_coef_cache(); st.rerun()
     if st.button("Salir", use_container_width=True): st.session_state.clear(); st.rerun()
