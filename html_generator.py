@@ -5,19 +5,20 @@ import re
 import datetime
 
 # -------------------------------------------------
-# UTILIDADES IMÁGENES
+# 1. UTILIDADES IMÁGENES (LOGO Y FOTOS)
 # -------------------------------------------------
 
 def procesar_logo_b64(ruta_logo: str) -> str:
     """Carga el logo desde el repo y lo convierte a Base64."""
     try:
+        # Intentamos abrir el archivo transparente.png
         with Image.open(ruta_logo) as img:
             buffered = BytesIO()
-            # No reducimos tanto la calidad para el logo
             img.save(buffered, format="PNG") 
             return base64.b64encode(buffered.getvalue()).decode()
     except Exception as e:
-        print(f"Error cargando el logo: {e}")
+        # Si no encuentra el logo, imprimimos el error pero dejamos que el script siga
+        print(f"Aviso: No se pudo cargar el logo en {ruta_logo}: {e}")
         return ""
 
 def procesar_foto_b64(foto: Image.Image) -> str:
@@ -29,19 +30,61 @@ def procesar_foto_b64(foto: Image.Image) -> str:
     foto.save(buffered, format="JPEG", quality=70, optimize=True)
     return base64.b64encode(buffered.getvalue()).decode()
 
-# (Tu función formatear_contenido se mantiene igual)
+# -------------------------------------------------
+# 2. FORMATEO TEXTO IA → HTML (La que faltaba)
+# -------------------------------------------------
+
+def formatear_contenido(texto: str) -> str:
+    """Convierte Markdown simple en HTML profesional."""
+    lineas = texto.split('\n')
+    resultado = []
+    en_tabla = False
+
+    for linea in lineas:
+        if '|' in linea:
+            columnas = [c.strip() for c in linea.split('|') if c.strip()]
+            if not columnas: continue
+
+            if not en_tabla:
+                resultado.append('<div style="overflow-x:auto;"><table><thead><tr>')
+                for col in columnas:
+                    resultado.append(f'<th>{col}</th>')
+                resultado.append('</tr></thead><tbody>')
+                en_tabla = True
+            elif '---' in linea:
+                continue
+            else:
+                resultado.append('<tr>')
+                for col in columnas:
+                    resultado.append(f'<td>{col}</td>')
+                resultado.append('</tr>')
+        else:
+            if en_tabla:
+                resultado.append('</tbody></table></div>')
+                en_tabla = False
+
+            if linea.strip():
+                # Negritas de Markdown a HTML
+                linea_formateada = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', linea)
+                resultado.append(f'<p>{linea_formateada}</p>')
+
+    if en_tabla:
+        resultado.append('</tbody></table></div>')
+
+    return '\n'.join(resultado)
 
 # -------------------------------------------------
-# GENERADOR HTML FINAL CON LOGO
+# 3. GENERADOR HTML FINAL
 # -------------------------------------------------
 
 def generar_informe_html(marca: str, modelo: str, informe_texto: str, lista_fotos: list, texto_ubicacion: str, ruta_logo: str = "transparente.png") -> bytes:
-    
-    # 1. Procesar Logo
-    logo_b64 = procesar_logo_b64(ruta_logo)
-    logo_tag = f'<img src="data:image/png;base64,{logo_b64}" style="height: 60px;">' if logo_b64 else ""
+    """Genera el HTML final con el logo arriba a la izquierda."""
 
-    # 2. Procesar Fotos
+    # Procesar Logo
+    logo_b64 = procesar_logo_b64(ruta_logo)
+    logo_tag = f'<img src="data:image/png;base64,{logo_b64}" style="height: 80px; width: auto;">' if logo_b64 else ""
+
+    # Procesar Fotos de la maquinaria
     fotos_html = ""
     for foto in lista_fotos:
         img_b64 = procesar_foto_b64(foto)
@@ -62,7 +105,7 @@ def generar_informe_html(marca: str, modelo: str, informe_texto: str, lista_foto
         body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 20px; color: #333; background-color: #f4f4f4; }}
         .container {{ background-color: white; max-width: 850px; margin: auto; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }}
         
-        /* HEADER CON LOGO */
+        /* Cabecera con Logo a la izquierda */
         .header {{ 
             display: flex; 
             align-items: center; 
@@ -72,9 +115,9 @@ def generar_informe_html(marca: str, modelo: str, informe_texto: str, lista_foto
             margin-bottom: 30px; 
         }}
         .header-logo {{ flex: 1; text-align: left; }}
-        .header-title {{ flex: 2; text-align: right; }}
+        .header-info {{ flex: 2; text-align: right; }}
         
-        .header h1 {{ color: #2e7d32; margin: 0; font-size: 24px; text-transform: uppercase; }}
+        .header h1 {{ color: #2e7d32; margin: 0; font-size: 26px; text-transform: uppercase; }}
         .content {{ line-height: 1.6; font-size: 15px; color: #444; }}
         
         table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
@@ -93,10 +136,10 @@ def generar_informe_html(marca: str, modelo: str, informe_texto: str, lista_foto
             <div class="header-logo">
                 {logo_tag}
             </div>
-            <div class="header-title">
+            <div class="header-info">
                 <h1>Agrícola Noroeste</h1>
-                <p style="font-weight:bold;margin:5px 0; color:#666;">INFORME DE TASACIÓN</p>
-                <p style="margin:0; font-size:13px;"><strong>Activo:</strong> {marca} {modelo} | <strong>Fecha:</strong> {fecha_hoy}</p>
+                <p style="font-weight:bold;margin:5px 0; color:#555;">INFORME DE TASACIÓN PROFESIONAL</p>
+                <p style="margin:0; font-size: 13px;"><strong>Activo:</strong> {marca} {modelo} | <strong>Fecha:</strong> {fecha_hoy}</p>
             </div>
         </div>
 
@@ -110,7 +153,7 @@ def generar_informe_html(marca: str, modelo: str, informe_texto: str, lista_foto
         </div>
 
         <div class="footer">
-            <p style="color:#888; font-size: 12px;">Este documento es un análisis técnico para uso interno comercial.</p>
+            <p style="color:#888; font-size: 12px;">Este documento es un análisis técnico para uso interno comercial de Agrícola Noroeste.</p>
             <div class="ref-tasacion">
                 Ref Tasación: {texto_ubicacion}
             </div>
