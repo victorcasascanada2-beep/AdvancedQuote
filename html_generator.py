@@ -77,7 +77,7 @@ def formatear_contenido(texto: str) -> str:
 # 3. GENERADOR HTML FINAL
 # -------------------------------------------------
 
-def generar_informe_html(marca: str, modelo: str, informe_texto: str, lista_fotos: list, texto_ubicacion: str, ruta_logo: str = "transparente.png") -> bytes:
+def generar_informe_html(marca: str, modelo: str, informe_texto: str, lista_fotos: list, texto_ubicacion: str, ruta_logo: str = "Transparente.png") -> bytes:
     """Genera el HTML final con el logo arriba a la izquierda."""
 
     # Procesar Logo
