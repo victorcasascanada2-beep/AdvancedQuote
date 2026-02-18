@@ -43,6 +43,17 @@ def ocultar_chrome_streamlit():
     padding-top: 1.8rem;
     padding-bottom: 2.2rem;
 }
+.extras-container {
+    background-color: white;
+    border: 1px solid rgba(47,111,62,.2);
+    border-radius: 14px;
+    padding: 15px;
+    font-family: 'Segoe UI', Roboto, Helvetica, sans-serif; /* La misma que el resto de la app */
+    color: #1F3D2B;
+    line-height: 1.6;
+    white-space: pre-wrap; /* Mantiene los saltos de línea del texto */
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
 
 /* Ocultar cromos Streamlit */
 #MainMenu, footer, header {visibility: hidden;}
@@ -682,8 +693,8 @@ if "result" not in st.session_state:
         else:
             with st.spinner("Procesando tasación..."):
                 try:
-                    total_ajustes, desglose_items = calcular_ajustes_extras(d, COEFS)
-                    bloque_extras = bloque_extras_texto(total_ajustes, desglose_items)
+                    total_ajustes, desglose_items = calcular_ajustes_(d, COEFS)
+                    bloque_ = bloque__texto(total_ajustes, desglose_items)
 
                     fotos_pil = _state_to_pil_images(d["fotos_state"])
                     fotos_for_ai = fotos_up if fotos_up else _state_to_uploadlike(d["fotos_state"])
@@ -726,9 +737,9 @@ if "result" not in st.session_state:
                         "nombre_archivo": nombre_fichero,
                         "id_archivo_drive": id_archivo,
                         "base_dict": base_dict,
-                        "extras_total": total_ajustes,
-                        "extras_items": desglose_items,
-                        "bloque_extras": bloque_extras,
+                        "_total": total_ajustes,
+                        "_items": desglose_items,
+                        "bloque_": bloque_,
                     }
                     st.rerun()
 
@@ -764,7 +775,7 @@ if "result" in st.session_state:
         st.metric("PRECIO_COMPRA", fmt_eur(base.get("PRECIO_COMPRA")))
 
     st.markdown("### Extras / Ajustes (APARTE)")
-    st.code(bloque_extras)
+    st.markdown(f'<div class="extras-container">{bloque_extras}</div>', unsafe_allow_html=True)
 
     if base.get("VALOR_MERCADO") is not None:
         st.markdown("### Referencia (base + extras) — solo orientativo")
