@@ -438,8 +438,8 @@ def bloque_extras_texto(total_ajustes: float, items: List[Tuple[str, float]]) ->
 # VISTA ACCESO (tasadores)
 # ------------------------------------------------------------
 def vista_acceso():
-    if os.path.exists("agricolanoroestelogo.jpg"):
-        st.image("agricolanoroestelogo.jpg", width=320)
+    if os.path.exists("Transparente.png"):
+        st.image("Transparente.png", width=320)
     else:
         st.title("🚜 Agrícola Noroeste")
 
@@ -513,8 +513,8 @@ ocultar_chrome_streamlit()
 # ------------------------------------------------------------
 col_logo, col_controls = st.columns([6, 2])
 with col_logo:
-    if os.path.exists("agricolanoroestelogo.jpg"):
-        st.image("agricolanoroestelogo.jpg", width=220)
+    if os.path.exists("Transparente.png"):
+        st.image("Transparente.png", width=220)
     else:
         st.markdown("### Agrícola Noroeste")
     st.markdown(f"### 🚜 {st.session_state.get('vendedor','')}")
