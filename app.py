@@ -365,16 +365,26 @@ OPC_VIDA = [""] + [str(x) for x in range(0, 101, 20)]
 # ------------------------------------------------------------
 # FORMULARIO / RESULTADOS
 # ------------------------------------------------------------
+# Busca esta línea en tu código y cámbiala por esta:
 if "result" not in st.session_state:
     st.subheader("Datos del Peritaje")
-    fotos_up = st.file_uploader("Subir fotos tractor (mín. 4)", accept_multiple_files=True, type=["jpg", "png"], key="uploader_fotos")
-    if fotos_up: st.session_state["draft"]["fotos_state"] = _fotos_to_state(fotos_up)
     
-    fotos_guardadas = st.session_state["draft"]["fotos_state"] or []
-    if fotos_guardadas:
-        st.success(f"✅ Fotos guardadas: {len(fotos_guardadas)}")
-        if st.button("🗑️ Vaciar fotos guardadas", use_container_width=True):
-            st.session_state["draft"]["fotos_state"] = []; st.session_state.pop("uploader_fotos", None); st.rerun()
+    # Hemos quitado type=["jpg", "png"] para que el móvil no restrinja el acceso a OneDrive/Archivos
+    fotos_up = st.file_uploader(
+        "Subir fotos tractor (mínimo 4)", 
+        accept_multiple_files=True, 
+        key="uploader_fotos"
+    )
+    
+    # Añadimos una validación extra después de subir para que solo acepte fotos
+    if fotos_up:
+        valid_types = ["image/jpeg", "image/png", "image/jpg"]
+        fotos_validas = [f for f in fotos_up if f.type in valid_types]
+        
+        if len(fotos_validas) < len(fotos_up):
+            st.warning("⚠️ Algunos archivos no son imágenes válidas y han sido omitidos.")
+            
+        st.session_state["draft"]["fotos_state"] = _fotos_to_state(fotos_validas)
     
     with st.form("form_peritaje"):
         c1, c2 = st.columns(2)
