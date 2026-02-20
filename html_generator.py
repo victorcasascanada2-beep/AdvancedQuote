@@ -10,7 +10,7 @@ import os
 # UTILIDADES IMÁGENES
 # -------------------------------------------------
 def _img_to_b64_jpg(img: Image.Image, max_size=(900, 900), quality=75) -> str:
-    """Convierte PIL Image a base64 JPG optimizado."""
+    """Convierte PIL Image a base64 JPG optimizado (solo para FOTOS)."""
     buffered = BytesIO()
     img = img.copy()
     img.thumbnail(max_size)
@@ -22,9 +22,9 @@ def _img_to_b64_jpg(img: Image.Image, max_size=(900, 900), quality=75) -> str:
 
 def cargar_logo_b64(path: str) -> str:
     """
-    Carga un logo local y lo devuelve como DATA URI listo para <img src="...">.
-    - Si tiene transparencia (alpha) => PNG (no negro).
-    - Si no => JPG optimizado.
+    Carga un logo local y devuelve un DATA URI listo para <img src="...">.
+    - Si tiene transparencia -> PNG (respeta alpha)
+    - Si no -> JPG
     """
     if not path or not os.path.exists(path):
         return ""
@@ -36,8 +36,8 @@ def cargar_logo_b64(path: str) -> str:
             buffered = BytesIO()
 
             has_alpha = (
-                img.mode in ("RGBA", "LA") or
-                (img.mode == "P" and "transparency" in img.info)
+                img.mode in ("RGBA", "LA")
+                or (img.mode == "P" and "transparency" in img.info)
             )
 
             if has_alpha:
@@ -54,16 +54,12 @@ def cargar_logo_b64(path: str) -> str:
     except Exception:
         return ""
 
+
 # -------------------------------------------------
-# FORMATEO TEXTO IA → HTML (manteniendo tablas markdown)
+# FORMATEO TEXTO IA → HTML
 # -------------------------------------------------
 def formatear_contenido(texto: str) -> str:
-    """
-    Convierte Markdown simple a HTML:
-    - Tablas markdown con pipes -> <table>
-    - Negritas **texto** -> <b>
-    - Saltos a <p>
-    """
+    """Convierte Markdown simple en HTML (tablas + negritas)."""
     if not texto:
         return ""
 
@@ -72,7 +68,6 @@ def formatear_contenido(texto: str) -> str:
     en_tabla = False
 
     for linea in lineas:
-        # tabla markdown (pipes)
         if "|" in linea:
             cols = [c.strip() for c in linea.split("|") if c.strip()]
             if not cols:
@@ -85,7 +80,6 @@ def formatear_contenido(texto: str) -> str:
                 out.append("</tr></thead><tbody>")
                 en_tabla = True
             elif "---" in linea:
-                # separador de cabecera de tabla markdown
                 continue
             else:
                 out.append("<tr>")
@@ -108,7 +102,7 @@ def formatear_contenido(texto: str) -> str:
 
 
 # -------------------------------------------------
-# GENERADOR HTML FINAL (estilo “pantalla”, sin botones)
+# GENERADOR HTML FINAL
 # -------------------------------------------------
 def generar_informe_html(
     marca: str,
@@ -118,274 +112,177 @@ def generar_informe_html(
     texto_ubicacion: str,
     vendedor: str = "",
 ) -> bytes:
-    """
-    Genera HTML con estilo tipo “app”:
-    - Fondo verde claro
-    - Cabecera con logo + título
-    - Secciones tipo tarjeta
-    - Sin botones
-    """
+    """Genera HTML final estilo app (sin botones)."""
 
     fecha_hoy = datetime.datetime.now().strftime("%d/%m/%Y")
     contenido_final = formatear_contenido(informe_texto or "")
 
-    # Logo (mismo nombre que usas en Streamlit)
-    logo_b64 = cargar_logo_b64("Transparente.png")
+    # LOGO (PNG transparente)
+    logo_src = cargar_logo_b64("Transparente.png")
+    logo_html = (
+        f'<img class="logo" src="{logo_src}" alt="Agrícola Noroeste">'
+        if logo_src
+        else ""
+    )
 
-    # Galería
+    # Fotos
     fotos_html = ""
     for foto in (lista_fotos or []):
         img_b64 = _img_to_b64_jpg(foto, max_size=(900, 900), quality=72)
-        fotos_html += (
-            f'<img class="photo" src="data:image/jpeg;base64,{img_b64}" loading="lazy" alt="Foto">'
-        )
+        fotos_html += f'<img class="photo" src="data:image/jpeg;base64,{img_b64}" alt="Foto">'
 
-    logo_html = ""
-    if logo_b64:
-        logo_html = f'<img class="logo" src="data:image/jpeg;base64,{logo_b64}" alt="Agrícola Noroeste">'
-
-    vendedor_html = f'<div class="user">👤 {vendedor}</div>' if (vendedor or "").strip() else ""
+    vendedor_html = f'<div class="user">👤 {vendedor}</div>' if vendedor else ""
 
     html = f"""<!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Tasación - {marca} {modelo}</title>
-  <style>
-    :root {{
-      --bg: #e8f3e8;
-      --card: #ffffff;
-      --green: #2e7d32;
-      --green2: #1f6b27;
-      --text: #1f2937;
-      --muted: #6b7280;
-      --border: rgba(0,0,0,0.08);
-    }}
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tasación - {marca} {modelo}</title>
 
-    body {{
-      margin: 0;
-      font-family: "Segoe UI", Arial, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-    }}
+<style>
+:root {{
+  --bg: #e8f3e8;
+  --card: #ffffff;
+  --green: #2e7d32;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --border: rgba(0,0,0,.08);
+}}
 
-    .page {{
-      max-width: 980px;
-      margin: 0 auto;
-      padding: 22px 16px 40px;
-    }}
+body {{
+  margin: 0;
+  font-family: "Segoe UI", Arial, sans-serif;
+  background: var(--bg);
+}}
 
-    /* CABECERA */
-    .header {{
-      background: #dff0df;
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px 18px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-    }}
+.page {{
+  max-width: 980px;
+  margin: auto;
+  padding: 22px 16px 40px;
+}}
 
-    .brand {{
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      min-width: 0;
-    }}
+.header {{
+  background: #dff0df;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}}
 
-    .logo {{
-      width: 150px;
-      height: auto;
-      display: block;
-    }}
+.brand {{
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}}
 
-    .title-wrap {{
-      min-width: 0;
-    }}
+.logo {{
+  width: 160px;
+}}
 
-    .title {{
-      margin: 0;
-      font-size: 20px;
-      font-weight: 800;
-      color: var(--green2);
-    }}
+.title {{
+  margin: 0;
+  font-size: 20px;
+  color: var(--green);
+}}
 
-    .subtitle {{
-      margin: 4px 0 0;
-      font-size: 12px;
-      color: var(--muted);
-    }}
+.subtitle {{
+  font-size: 12px;
+  color: var(--muted);
+}}
 
-    .meta {{
-      text-align: right;
-      font-size: 12px;
-      color: var(--muted);
-      white-space: nowrap;
-    }}
+.meta {{
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+}}
 
-    .user {{
-      margin-top: 6px;
-      font-size: 12px;
-      color: var(--text);
-      font-weight: 600;
-    }}
+.user {{
+  margin-top: 6px;
+  font-weight: 600;
+}}
 
-    .divider {{
-      height: 1px;
-      background: rgba(0,0,0,0.12);
-      margin: 14px 0 16px;
-      border: 0;
-    }}
+.card {{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  margin-top: 14px;
+}}
 
-    /* “alert” */
-    .status {{
-      background: #dff6e5;
-      border: 1px solid rgba(46,125,50,0.25);
-      border-radius: 10px;
-      padding: 10px 12px;
-      font-size: 13px;
-      margin-top: 14px;
-    }}
+.gallery {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}}
 
-    /* CARDS */
-    .card {{
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 14px 16px;
-      margin-top: 14px;
-    }}
+.photo {{
+  width: calc(50% - 5px);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}}
 
-    .card h2 {{
-      margin: 0 0 10px;
-      font-size: 16px;
-      color: var(--text);
-    }}
+.footer {{
+  margin-top: 20px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+}}
 
-    .content p {{
-      margin: 0 0 10px;
-      line-height: 1.45;
-      font-size: 13px;
-      color: #2b2f36;
-    }}
+.ref {{
+  font-family: monospace;
+  font-size: 10px;
+  margin-top: 6px;
+}}
 
-    /* TABLAS markdown */
-    .table-wrap {{
-      overflow-x: auto;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-      background: #fff;
-      margin: 10px 0 12px;
-    }}
-    table.md-table {{
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12px;
-    }}
-    table.md-table th {{
-      background: var(--green);
-      color: #fff;
-      text-align: left;
-      padding: 10px;
-      font-weight: 700;
-    }}
-    table.md-table td {{
-      padding: 8px 10px;
-      border-top: 1px solid rgba(0,0,0,0.06);
-      white-space: nowrap;
-    }}
-    table.md-table tr:nth-child(even) td {{
-      background: #fafafa;
-    }}
-
-    /* GALERÍA */
-    .gallery {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-    }}
-    .photo {{
-      width: calc(50% - 5px);
-      border-radius: 10px;
-      border: 1px solid rgba(0,0,0,0.12);
-      background: #fff;
-      object-fit: cover;
-    }}
-
-    /* FOOTER */
-    .footer {{
-      margin-top: 18px;
-      text-align: center;
-      color: var(--muted);
-      font-size: 11px;
-    }}
-    .ref {{
-      margin-top: 6px;
-      color: #9aa3af;
-      font-family: monospace;
-      font-size: 10px;
-      word-break: break-all;
-    }}
-
-    @media (max-width: 650px) {{
-      .header {{
-        flex-direction: column;
-        align-items: flex-start;
-      }}
-      .meta {{
-        text-align: left;
-      }}
-      .photo {{
-        width: 100%;
-      }}
-      .logo {{
-        width: 170px;
-      }}
-    }}
-  </style>
+@media (max-width: 650px) {{
+  .header {{
+    flex-direction: column;
+    align-items: flex-start;
+  }}
+  .photo {{
+    width: 100%;
+  }}
+}}
+</style>
 </head>
+
 <body>
-  <div class="page">
+<div class="page">
 
-    <div class="header">
-      <div class="brand">
-        {logo_html}
-        <div class="title-wrap">
-          <h1 class="title">Tasación de maquinaria</h1>
-          <div class="subtitle">Agrícola Noroeste · Valoración orientativa basada en estado, horas y mercado</div>
-          {vendedor_html}
-        </div>
-      </div>
-      <div class="meta">
-        <div><b>Activo:</b> {marca} {modelo}</div>
-        <div><b>Fecha:</b> {fecha_hoy}</div>
+  <div class="header">
+    <div class="brand">
+      {logo_html}
+      <div>
+        <h1 class="title">Tasación de maquinaria</h1>
+        <div class="subtitle">Agrícola Noroeste · Valoración orientativa</div>
+        {vendedor_html}
       </div>
     </div>
-
-    <div class="status">✅ Informe generado y preparado para archivo.</div>
-
-    <div class="card">
-      <h2>Resultado del Análisis (IA)</h2>
-      <div class="content">
-        {contenido_final}
-      </div>
+    <div class="meta">
+      <div><b>Activo:</b> {marca} {modelo}</div>
+      <div><b>Fecha:</b> {fecha_hoy}</div>
     </div>
-
-    <div class="card">
-      <h2>Registro fotográfico</h2>
-      <div class="gallery">
-        {fotos_html}
-      </div>
-    </div>
-
-    <div class="footer">
-      Este documento es un análisis técnico para uso interno comercial.
-      <div class="ref">Ref Tasación: {texto_ubicacion}</div>
-    </div>
-
   </div>
+
+  <div class="card">
+    <h2>Resultado del análisis</h2>
+    {contenido_final}
+  </div>
+
+  <div class="card">
+    <h2>Registro fotográfico</h2>
+    <div class="gallery">{fotos_html}</div>
+  </div>
+
+  <div class="footer">
+    Documento interno · Agrícola Noroeste
+    <div class="ref">Ref Tasación: {texto_ubicacion}</div>
+  </div>
+
+</div>
 </body>
 </html>
 """
