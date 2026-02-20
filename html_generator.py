@@ -21,15 +21,38 @@ def _img_to_b64_jpg(img: Image.Image, max_size=(900, 900), quality=75) -> str:
 
 
 def cargar_logo_b64(path: str) -> str:
-    """Carga un logo local (si existe) y lo devuelve en base64 JPG. Si no existe, ''."""
+    """
+    Carga un logo local y lo devuelve como DATA URI listo para <img src="...">.
+    - Si tiene transparencia (alpha) => PNG (no negro).
+    - Si no => JPG optimizado.
+    """
     if not path or not os.path.exists(path):
         return ""
+
     try:
         with Image.open(path) as img:
-            return _img_to_b64_jpg(img, max_size=(520, 260), quality=85)
+            img = img.copy()
+            img.thumbnail((520, 260))
+            buffered = BytesIO()
+
+            has_alpha = (
+                img.mode in ("RGBA", "LA") or
+                (img.mode == "P" and "transparency" in img.info)
+            )
+
+            if has_alpha:
+                img.save(buffered, format="PNG", optimize=True)
+                b64 = base64.b64encode(buffered.getvalue()).decode()
+                return f"data:image/png;base64,{b64}"
+
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            img.save(buffered, format="JPEG", quality=85, optimize=True)
+            b64 = base64.b64encode(buffered.getvalue()).decode()
+            return f"data:image/jpeg;base64,{b64}"
+
     except Exception:
         return ""
-
 
 # -------------------------------------------------
 # FORMATEO TEXTO IA → HTML (manteniendo tablas markdown)
