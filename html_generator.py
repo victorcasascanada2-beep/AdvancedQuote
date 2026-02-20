@@ -107,7 +107,7 @@ def generar_informe_html(
     contenido_final = formatear_contenido(informe_texto or "")
 
     # Logo (mismo nombre que usas en Streamlit)
-    logo_b64 = cargar_logo_b64("agricolanoroestelogo.jpg")
+    logo_b64 = cargar_logo_b64("Transparente.png")
 
     # Galería
     fotos_html = ""
