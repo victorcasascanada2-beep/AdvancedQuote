@@ -70,8 +70,26 @@ def _tasacion_sin_busqueda(client, prompt_tasacion, fotos_sorted) -> str:
     if _HAS_TYPES:
         parts = []
         for f in fotos_sorted:
-            data = _normalizar_imagen_a_jpeg_bytes(f)
-            parts.append(types.Part.from_bytes(data=data, mime_type="image/jpeg"))
+            # Si ya viene como JPEG optimizado (desde app.py), evitamos PIL aquí.
+            data = None
+            mime = getattr(f, "type", None) or getattr(f, "mime", None) or "image/jpeg"
+            try:
+                # Streamlit UploadedFile / BytesIO
+                pos = f.tell()
+                f.seek(0)
+                data = f.read()
+                f.seek(pos)
+            except Exception:
+                try:
+                    data = f.getvalue()
+                except Exception:
+                    data = None
+
+            if not data or mime != "image/jpeg":
+                data = _normalizar_imagen_a_jpeg_bytes(f)
+                mime = "image/jpeg"
+
+            parts.append(types.Part.from_bytes(data=data, mime_type=mime))
 
         resp = client.models.generate_content(
             model="gemini-2.5-pro",
