@@ -70,7 +70,24 @@ def _tasacion_sin_busqueda(client, prompt_tasacion, fotos_sorted) -> str:
     if _HAS_TYPES:
         parts = []
         for f in fotos_sorted:
-            data = _normalizar_imagen_a_jpeg_bytes(f)
+            # Si ya viene como JPEG optimizado (p. ej. desde app.py en fotos_state),
+            # evitamos volver a abrir con PIL para reducir picos de RAM.
+            data = None
+            try:
+                pos = f.tell()
+                f.seek(0)
+                data = f.read()
+                f.seek(pos)
+            except Exception:
+                try:
+                    data = f.getvalue()
+                except Exception:
+                    data = None
+
+            is_jpeg = bool(data) and len(data) >= 2 and data[0:2] == b"\xff\xd8"
+            if not is_jpeg:
+                data = _normalizar_imagen_a_jpeg_bytes(f)
+
             parts.append(types.Part.from_bytes(data=data, mime_type="image/jpeg"))
 
         resp = client.models.generate_content(

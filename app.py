@@ -1,4 +1,3 @@
-# app.py — Tasador Agrícola Noroeste (VERSIÓN INTEGRAL COMPROBADA CON SHEETS)
 import streamlit as st
 import os
 import io
@@ -125,12 +124,14 @@ div[data-baseweb="textarea"] textarea {
 # CREDS
 # ------------------------------------------------------------
 def get_creds():
-    if ES_CLOUD_RUN: return None
+    if ES_CLOUD_RUN: 
+        return None
     try:
         return dict(st.secrets["google"])
     except Exception:
         st.error("Faltan secrets locales: st.secrets['google'].")
         st.stop()
+
 
 CREDS = get_creds()
 
@@ -148,19 +149,30 @@ DEFAULT_COEFS = {
 @st.cache_data(ttl=60, show_spinner=False)
 def get_coeficientes_cached(env_key: str) -> Dict[str, Any]:
     creds = None if env_key == "cloud" else CREDS
-    coefs = google_drive_manager.leer_coeficientes(creds) or {}
-    merged = dict(DEFAULT_COEFS)
-    for k, v in coefs.items():
-        if k == "neumaticos" and isinstance(v, dict):
-            merged_neu = dict(DEFAULT_COEFS["neumaticos"])
-            merged_neu.update(v)
-            merged["neumaticos"] = merged_neu
-        else: merged[k] = v
-    return merged
+    try:
+        coefs = google_drive_manager.leer_coeficientes(creds)
+        if not coefs:
+            return DEFAULT_COEFS
+        # merge tolerante
+        merged = dict(DEFAULT_COEFS)
+        for k, v in coefs.items():
+            if k == "neumaticos" and isinstance(v, dict):
+                merged_neu = dict(merged.get("neumaticos", {}))
+                merged_neu.update(v)
+                merged["neumaticos"] = merged_neu
+            else:
+                merged[k] = v
+        return merged
+    except Exception:
+        return DEFAULT_COEFS
 
 def invalidate_coef_cache():
-    try: get_coeficientes_cached.clear()
-    except: pass
+    try:
+        get_coeficientes_cached.clear()
+    except Exception:
+        pass
+
+COEFS = get_coeficientes_cached(ENV_KEY)
 
 # ------------------------------------------------------------
 # VENDEDORES (Drive)
@@ -171,8 +183,11 @@ def get_vendedores_cached(env_key: str) -> List[str]:
     return google_drive_manager.leer_vendedores(creds) or []
 
 def invalidate_vendedores_cache():
-    try: get_vendedores_cached.clear()
-    except: pass
+    try:
+        get_vendedores_cached.clear()
+    except Exception:
+        pass
+
 
 # ------------------------------------------------------------
 # HELPERS FOTOS
@@ -184,202 +199,189 @@ def _fotos_to_state(uploaded_files) -> List[Dict[str, Any]]:
     """
     state = []
     for f in uploaded_files or []:
-        # Redimensionamos AL VUELO usando la lógica de ia_engine
-        # max_side=800 y quality=60 para máxima ligereza
         data_optimizada = ia_engine._normalizar_imagen_a_jpeg_bytes(
-            f, 
-            max_side=800, 
+            f,
+            max_side=800,
             quality=60
         )
-        
         state.append({
-            "name": getattr(f, "name", "foto.jpg"), 
-            "type": "image/jpeg", 
+            "name": getattr(f, "name", "foto.jpg"),
+            "type": "image/jpeg",
             "data": data_optimizada
         })
     return state
 
+
 def _state_to_pil_images(fotos_state) -> List[Image.Image]:
     return [Image.open(io.BytesIO(item["data"])) for item in fotos_state or []]
+
 
 class InMemoryUpload(io.BytesIO):
     def __init__(self, data: bytes, name: str = "foto.jpg", mime: str = "image/jpeg"):
         super().__init__(data)
         self.name, self.type = name, mime
 
+
 def _state_to_uploadlike(fotos_state) -> List[InMemoryUpload]:
     return [InMemoryUpload(x["data"], x.get("name", "foto.jpg"), x.get("type", "image/jpeg")) for x in (fotos_state or [])]
 
-# ------------------------------------------------------------
-# VALIDACIÓN / PARSEO
-# ------------------------------------------------------------
-def _is_blank(s: Any) -> bool: return s is None or str(s).strip() == ""
-def _parse_float(value: Any) -> float: return float(str(value).replace(",", ".").strip())
 
-def validar_datos(draft: Dict[str, Any]) -> List[str]:
+# ------------------------------------------------------------
+# FORMATO / PARSEO
+# ------------------------------------------------------------
+def _parse_float(x: str) -> float:
+    return float(str(x).replace(",", ".").strip())
+
+def fmt_eur(x: Optional[int]) -> str:
+    if x is None:
+        return "N/D"
+    try:
+        return f"{int(x):,} €".replace(",", ".")
+    except Exception:
+        return "N/D"
+
+def validar_datos(d: Dict[str, Any]) -> List[str]:
     errores = []
-    for campo in ["marca", "modelo", "anio", "horas", "cv"]:
-        if _is_blank(draft.get(campo, "")): errores.append(f"El campo **{campo}** es obligatorio.")
-    anio = str(draft.get("anio", "")).strip()
-    if anio and (not anio.isdigit() or len(anio) != 4):
-        errores.append("El campo **año** debe ser un número de 4 dígitos (ej: 2022).")
-    if len(draft.get("fotos_state") or []) < 4:
-        errores.append("Debes subir **mínimo 4 fotos** para tasar.")
-    if _is_blank(draft.get("vida_neum_grandes", "")):
-        errores.append("Selecciona la **vida útil neumáticos grandes (%)**.")
-    if _is_blank(draft.get("vida_neum_pequenos", "")):
-        errores.append("Selecciona la **vida útil neumáticos pequeños (%)**.")
+    for k in ["marca", "modelo", "anio", "horas", "cv", "vida_neum_grandes", "vida_neum_pequenos"]:
+        if not str(d.get(k, "")).strip():
+            errores.append(f"Falta el campo obligatorio: {k}")
+
+    try:
+        _ = _parse_float(d.get("horas", "0"))
+    except Exception:
+        errores.append("Horas inválidas.")
+    try:
+        _ = _parse_float(d.get("cv", "0"))
+    except Exception:
+        errores.append("CV inválido.")
+
+    # Fotos mínimo 4 (como el UI)
+    fotos = d.get("fotos_state") or []
+    if len(fotos) < 4:
+        errores.append("Mínimo 4 fotos.")
     return errores
 
-def _find_block_resultado_final(text: str) -> str:
-    if not text: return ""
-    m = re.search(r"(?is)BLOQUE\s*:\s*RESULTADO_FINAL\s*(.*)", text)
-    if not m: return ""
-    tail = m.group(1)
-    m2 = re.search(r"(?is)\n\s*BLOQUE\s*:\s*", tail)
-    return tail[: m2.start()] if m2 else tail
 
-def _extract_int_line(block: str, key: str) -> Optional[float]:
-    if not block: return None
-    m = re.search(rf"(?im)^\s*-?\s*{re.escape(key)}\s*:\s*([\-]?\d+)\s*$", block)
-    if not m: return None
-    try: return float(m.group(1))
-    except: return None
+def parse_resultado_final(texto: str) -> Dict[str, Any]:
+    """
+    Extrae (si existe) el bloque RESULTADO_FINAL y devuelve dict con keys:
+    VALOR_MERCADO, PRECIO_VENTA, PRECIO_COMPRA
+    """
+    if not texto:
+        return {}
+    m = re.search(r"BLOQUE:\s*RESULTADO_FINAL(.*?)(?:BLOQUE:|$)", texto, flags=re.S | re.I)
+    if not m:
+        return {}
+    block = m.group(1).strip()
 
-def parse_resultado_final(text: str) -> Dict[str, float]:
-    out: Dict[str, float] = {}
-    block = _find_block_resultado_final(text)
-    keys = ["VALOR_BASE", "AJUSTE_HORAS_%", "AJUSTE_ESTADO_%", "VALOR_MERCADO", "PRECIO_VENTA", "PRECIO_COMPRA"]
-    for k in keys:
-        v = _extract_int_line(block, k)
-        if v is not None: out[k] = v
-    vb = out.get("VALOR_BASE")
-    if out.get("VALOR_MERCADO") is None and vb is not None:
-        ah, ae = out.get("AJUSTE_HORAS_%", 0.0), out.get("AJUSTE_ESTADO_%", 0.0)
-        out["VALOR_MERCADO"] = float(round(vb * (1.0 + ah / 100.0) * (1.0 + ae / 100.0)))
-    vm = out.get("VALOR_MERCADO")
-    if vm:
-        if out.get("PRECIO_VENTA") is None: out["PRECIO_VENTA"] = float(round(vm * 0.92))
-        if out.get("PRECIO_COMPRA") is None: out["PRECIO_COMPRA"] = float(round(vm * 0.85))
-    return out
+    def get_int(key):
+        mm = re.search(rf"{re.escape(key)}\s*:\s*([0-9\.\,]+)", block)
+        if not mm:
+            return None
+        return int(float(mm.group(1).replace(".", "").replace(",", ".")))
+
+    return {
+        "VALOR_MERCADO": get_int("VALOR_MERCADO"),
+        "PRECIO_VENTA": get_int("PRECIO_VENTA"),
+        "PRECIO_COMPRA": get_int("PRECIO_COMPRA"),
+    }
+
 
 # ------------------------------------------------------------
-# MOTOR AJUSTES
+# EXTRAS / AJUSTES
 # ------------------------------------------------------------
-def calcular_ajustes_extras(draft: Dict[str, Any], coefs: Dict[str, Any]) -> Tuple[float, List[Tuple[str, float]]]:
-    cv = _parse_float(draft["cv"])
-    kg = _parse_float(draft.get("kg_contrapesos", 0) or 0)
-    vida_g, vida_p = float(draft["vida_neum_grandes"]), float(draft["vida_neum_pequenos"])
-    desglose, total = [], 0.0
+def calcular_ajustes_extras(d: Dict[str, Any], coefs: Dict[str, Any]) -> Tuple[float, List[Tuple[str, float]]]:
+    items = []
+    cv = _parse_float(d.get("cv", "0") or "0")
+    kg = _parse_float(d.get("kg_contrapesos", "0") or "0")
 
-    pala, anclajes = bool(draft.get("extra_pala")), bool(draft.get("extra_anclajes_pala"))
-    trip, tdf = bool(draft.get("extra_tripuntal_del")), bool(draft.get("extra_tdf_del"))
-    comp, autog = bool(draft.get("extra_compresor")), bool(draft.get("extra_autoguiado"))
+    if d.get("extra_pala"):
+        items.append(("Pala", cv * float(coefs.get("pala_eur_por_cv", 0))))
+    if d.get("extra_anclajes_pala"):
+        items.append(("Anclajes pala", cv * float(coefs.get("anclajes_eur_por_cv", 0))))
+    if d.get("extra_tripuntal_del"):
+        items.append(("Tripuntal del.", cv * float(coefs.get("tripuntal_eur_por_cv", 0))))
+    if d.get("extra_tdf_del"):
+        items.append(("Tripuntal+TDF del.", cv * float(coefs.get("tripuntal_tdf_eur_por_cv", 0))))
+    if d.get("extra_compresor"):
+        items.append(("Compresor", float(coefs.get("compresor_eur_fijo", 0))))
+    if d.get("extra_autoguiado"):
+        items.append(("Autoguiado", float(coefs.get("autoguiado_eur_fijo", 0))))
 
-    if pala:
-        v = float(coefs.get("pala_eur_por_cv", 0.0)) * cv
-        desglose.append(("Pala usada", v)); total += v; anclajes = False
-    if anclajes:
-        v = float(coefs.get("anclajes_eur_por_cv", 0.0)) * cv
-        desglose.append(("Anclajes de pala", v)); total += v
-    if tdf:
-        trip, v = True, float(coefs.get("tripuntal_tdf_eur_por_cv", 0.0)) * cv
-        desglose.append(("Tripuntal + TDF del.", v)); total += v
-    elif trip:
-        v = float(coefs.get("tripuntal_eur_por_cv", 0.0)) * cv
-        desglose.append(("Tripuntal del.", v)); total += v
-    if comp:
-        v = float(coefs.get("compresor_eur_fijo", 0.0))
-        desglose.append(("Compresor aire", v)); total += v
-    if autog:
-        v = (float(coefs.get("autoguiado_eur_por_cv", 0.0)) * cv) + float(coefs.get("autoguiado_eur_fijo", 0.0))
-        if v != 0: desglose.append(("Autoguiado", v)); total += v
     if kg > 0:
-        v = float(coefs.get("contrapesos_eur_por_kg", 0.0)) * kg
-        desglose.append((f"Contrapesos ({kg:.0f} kg)", v)); total += v
+        items.append(("Contrapesos", kg * float(coefs.get("contrapesos_eur_por_kg", 0))))
 
-    neu = coefs.get("neumaticos", {})
-    penal_g = (1.0 - (vida_g / 100.0)) * float(neu.get("max_grandes_eur_por_cv", 50.0)) * cv
-    penal_p = (1.0 - (vida_p / 100.0)) * float(neu.get("max_pequenos_eur_por_cv", 20.0)) * cv
-    if penal_g > 0: desglose.append((f"Neumáticos grandes (vida {vida_g:.0f}%)", -penal_g)); total -= penal_g
-    if penal_p > 0: desglose.append((f"Neumáticos pequeños (vida {vida_p:.0f}%)", -penal_p)); total -= penal_p
+    # Neumáticos (vida %)
+    vg = int(str(d.get("vida_neum_grandes", "0") or "0"))
+    vp = int(str(d.get("vida_neum_pequenos", "0") or "0"))
 
-    return total, desglose
+    neu = coefs.get("neumaticos", {}) if isinstance(coefs.get("neumaticos", {}), dict) else {}
+    max_gr = float(neu.get("max_grandes_eur_por_cv", 0))
+    max_pe = float(neu.get("max_pequenos_eur_por_cv", 0))
 
-def fmt_eur(x: Optional[float]) -> str:
-    if x is None: return "—"
-    return f"{x:,.0f} €".replace(",", "X").replace(".", ",").replace("X", ".")
+    # Penaliza en función de la vida que falta (100% -> 0 penalización, 0% -> -max)
+    items.append(("Neumáticos grandes (vida)", -cv * max_gr * (1 - vg / 100.0)))
+    items.append(("Neumáticos pequeños (vida)", -cv * max_pe * (1 - vp / 100.0)))
 
-def bloque_extras_texto(total_ajustes: float, items: List[Tuple[str, float]]) -> str:
-    lines = ["[EXTRAS / AJUSTES (APARTE)]"]
-    for concepto, importe in items:
-        sign = "+" if importe >= 0 else "-"
-        lines.append(f"- {concepto}: {sign}{fmt_eur(abs(importe))}")
-    lines.append(f"- TOTAL EXTRAS/APARTADOS: {fmt_eur(total_ajustes)}")
+    total = sum(x[1] for x in items)
+    return total, items
+
+
+def bloque_extras_texto(total: float, items: List[Tuple[str, float]]) -> str:
+    lines = []
+    lines.append("[EXTRAS / AJUSTES (APARTE)]")
+    for name, val in items:
+        s = f"{val:,.0f} €".replace(",", ".")
+        sign = "+" if val >= 0 else ""
+        lines.append(f"- {name}: {sign}{s}")
+    lines.append(f"- TOTAL EXTRAS/APARTADOS: {total:,.0f} €".replace(",", "."))
     return "\n".join(lines)
 
-# ------------------------------------------------------------
-# VISTA ACCESO
-# ------------------------------------------------------------
-def vista_acceso():
-    if os.path.exists("Transparente.png"): st.image("Transparente.png", width=320)
-    else: st.title("🚜 Agrícola Noroeste")
-    st.subheader("Acceso de Tasadores")
-    
-    c1, c2 = st.columns([3, 1])
-    with c2:
-        if st.button("🔄 Refrescar", use_container_width=True): invalidate_vendedores_cache(); st.rerun()
-
-    vendedores = get_vendedores_cached(ENV_KEY)
-    t1, t2 = st.tabs(["Seleccionar", "Registrar nuevo"])
-    with t1:
-        with st.form("form_sel"):
-            v_sel = st.selectbox("Selecciona tu nombre:", [""] + vendedores)
-            if st.form_submit_button("Entrar", use_container_width=True) and v_sel:
-                st.session_state["logged_in"] = True
-                st.session_state["vendedor"] = v_sel; st.rerun()
-    with t2:
-        with st.form("form_reg", clear_on_submit=True):
-            nuevo = st.text_input("Nombre y Apellido del nuevo tasador:")
-            if st.form_submit_button("Registrar y Entrar", use_container_width=True) and nuevo.strip():
-                google_drive_manager.actualizar_vendedores(None if ES_CLOUD_RUN else CREDS, vendedores + [nuevo.strip()])
-                invalidate_vendedores_cache(); st.session_state["logged_in"] = True
-                st.session_state["vendedor"] = nuevo.strip(); st.rerun()
 
 # ------------------------------------------------------------
-# MAIN LOGIN
+# INIT STATE
 # ------------------------------------------------------------
-if "logged_in" not in st.session_state: st.session_state["logged_in"] = False
-if not st.session_state["logged_in"]:
-    vista_acceso(); st.stop()
-
 ocultar_chrome_streamlit()
 
-# ------------------------------------------------------------
-# HEADER (Logo + Controles)
-# ------------------------------------------------------------
-col_logo, col_controls = st.columns([6, 2])
-with col_logo:
-    if os.path.exists("Transparente.png"): st.image("Transparente.png", width=220)
-    else: st.markdown("### Agrícola Noroeste")
-    st.markdown(f"### 🤝🚜 {st.session_state.get('vendedor','')}")
-with col_controls:
-    if st.button("♻️ Recargar coeficientes", use_container_width=True): invalidate_coef_cache(); st.rerun()
-    if st.button("Salir", use_container_width=True): st.session_state.clear(); st.rerun()
+if "draft" not in st.session_state:
+    st.session_state["draft"] = {
+        "marca": "", "modelo": "", "anio": "", "horas": "", "cv": "",
+        "kg_contrapesos": "", "obs": "",
+        "extra_pala": False, "extra_anclajes_pala": False,
+        "extra_tripuntal_del": False, "extra_tdf_del": False,
+        "extra_compresor": False, "extra_autoguiado": False,
+        "vida_neum_grandes": "", "vida_neum_pequenos": "",
+        "fotos_state": [],
+    }
 
-st.divider()
-COEFS = get_coeficientes_cached(ENV_KEY)
-
-# Vertex AI
 if "vertex_client" not in st.session_state:
-    st.session_state.vertex_client = ia_engine.conectar_vertex(None if ES_CLOUD_RUN else CREDS)
+    st.session_state["vertex_client"] = ia_engine.conectar_vertex(CREDS)
 
-# GPS
-loc = get_geolocation(component_key="gps_v1")
-texto_ubicacion = location_manager.codificar_coordenadas(loc["coords"]["latitude"], loc["coords"]["longitude"]) if loc and "coords" in loc else "UBICACIÓN NO DETECTADA"
+# Ubicación
+texto_ubicacion = ""
+try:
+    # Si tienes geolocalización en front
+    geo = get_geolocation()
+    if geo and isinstance(geo, dict):
+        texto_ubicacion = location_manager.ubicacion_a_texto(geo)
+    else:
+        texto_ubicacion = location_manager.obtener_texto_ubicacion()
+except Exception:
+    texto_ubicacion = ""
 
-# DRAFT SETUP
-st.session_state.setdefault("draft", {"marca": "Valtra", "modelo": "G125", "anio": "2025", "horas": "2500", "cv": "", "kg_contrapesos": "0", "vida_neum_grandes": "", "vida_neum_pequenos": "", "obs": "", "fotos_state": [], "extra_pala": False, "extra_anclajes_pala": False, "extra_tripuntal_del": False, "extra_tdf_del": False, "extra_compresor": False, "extra_autoguiado": False})
+
+# Vendedor (selector)
+vendedores = get_vendedores_cached(ENV_KEY)
+if "vendedor" not in st.session_state:
+    st.session_state["vendedor"] = vendedores[0] if vendedores else ""
+
+st.markdown("### 👤 Vendedor")
+st.session_state["vendedor"] = st.selectbox(
+    "Selecciona vendedor",
+    options=vendedores if vendedores else ["(sin vendedores)"],
+    index=(vendedores.index(st.session_state["vendedor"]) if (vendedores and st.session_state["vendedor"] in vendedores) else 0),
+)
+
 OPC_VIDA = [""] + [str(x) for x in range(0, 101, 20)]
 
 # ------------------------------------------------------------
@@ -440,7 +442,7 @@ if "result" not in st.session_state:
                         inf = ia_engine.realizar_peritaje(st.session_state.vertex_client, marca, modelo, anio, horas, obs, _state_to_uploadlike(d["fotos_state"]))
                         base_dict = parse_resultado_final(inf)
                         ref_b64 = base64.b64encode(texto_ubicacion.encode("utf-8")).decode("utf-8")
-                        html = html_generator.generar_informe_html(marca, modelo, inf, _state_to_pil_images(d["fotos_state"]), ref_b64,vendedor=st.session_state.get("vendedor", ""))
+                        html = html_generator.generar_informe_html(marca, modelo, inf, d["fotos_state"], ref_b64,vendedor=st.session_state.get("vendedor", ""))
                         
                         # Guardar en Drive
                         id_drive = google_drive_manager.subir_informe(None if ES_CLOUD_RUN else CREDS, f"Tasacion_{marca}_{modelo}.html", html, folder_name=st.session_state["vendedor"])
@@ -451,9 +453,9 @@ if "result" not in st.session_state:
                             requests.post(url_sheets, json={
                                 "vendedor": st.session_state["vendedor"],
                                 "marca": marca, "modelo": modelo, "horas": horas, "caballos": cv,
-                                "precioMercado": int(base_dict.get("VALOR_MERCADO", 0) + total_aj),
-                                "precioVenta": int(base_dict.get("PRECIO_VENTA", 0) + total_aj),
-                                "precioCompra": int(base_dict.get("PRECIO_COMPRA", 0) + total_aj)
+                                "precioMercado": int((base_dict.get("VALOR_MERCADO") or 0) + total_aj),
+                                "precioVenta": int((base_dict.get("PRECIO_VENTA") or 0) + total_aj),
+                                "precioCompra": int((base_dict.get("PRECIO_COMPRA") or 0) + total_aj)
                             })
                             st.toast("✅ Registro en Excel OK")
                         except Exception as e_sheet:
@@ -461,15 +463,18 @@ if "result" not in st.session_state:
 
                         st.session_state["result"] = {"informe_final": inf, "html": html, "nombre_archivo": f"Tasacion_{marca}_{modelo}.html", "id_archivo_drive": id_drive, "base_dict": base_dict, "extras_total": total_aj, "bloque_extras": bloque_extras}
                         st.rerun()
-                    except Exception as e: st.error(f"Error en el proceso: {e}")
+                    except Exception as e: 
+                        st.error(f"Error en el proceso: {e}")
 
 # --- PÁGINA DE RESULTADOS ---
 else:
     res = st.session_state["result"]
     base = res.get("base_dict", {})
     
-    if res.get("id_archivo_drive"): st.success("✅ Peritaje archivado en Drive.")
-    else: st.warning("⚠️ No se pudo archivar en Drive (revisar permisos).")
+    if res.get("id_archivo_drive"): 
+        st.success("✅ Peritaje archivado en Drive.")
+    else: 
+        st.warning("⚠️ No se pudo archivar en Drive (revisar permisos).")
 
     st.markdown("### 🤖 Resultado del Análisis (IA)")
     st.markdown(f'<div class="card">{res["informe_final"]}</div>', unsafe_allow_html=True)
