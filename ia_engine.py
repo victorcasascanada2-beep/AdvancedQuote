@@ -45,14 +45,7 @@ def conectar_vertex(creds_dict=None):
     )
 
 
-def _normalizar_imagen_a_jpeg_bytes(uploaded_file, max_side=1024, quality=85) -> bytes:
-    """
-    Normalización para reducir variación:
-    - EXIF transpose (rotación)
-    - RGB
-    - resize determinista
-    - JPEG con quality fija
-    """
+def _normalizar_imagen_a_jpeg_bytes(uploaded_file, max_side=800, quality=60) -> bytes:
     img = Image.open(uploaded_file)
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
@@ -65,6 +58,7 @@ def _normalizar_imagen_a_jpeg_bytes(uploaded_file, max_side=1024, quality=85) ->
         img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
     buf = io.BytesIO()
+    # Aquí aplicamos la calidad 60 y optimización de tabla JPEG
     img.save(buf, format="JPEG", quality=quality, optimize=True)
     return buf.getvalue()
 

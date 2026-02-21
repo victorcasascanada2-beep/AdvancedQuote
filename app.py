@@ -178,7 +178,26 @@ def invalidate_vendedores_cache():
 # HELPERS FOTOS
 # ------------------------------------------------------------
 def _fotos_to_state(uploaded_files) -> List[Dict[str, Any]]:
-    return [{"name": getattr(f, "name", "foto.jpg"), "type": getattr(f, "type", "image/jpeg"), "data": f.getvalue()} for f in uploaded_files or []]
+    """
+    Procesa las fotos NADA MÁS ELEGIRLAS para que 
+    la RAM de Cloud Run no sufra.
+    """
+    state = []
+    for f in uploaded_files or []:
+        # Redimensionamos AL VUELO usando la lógica de ia_engine
+        # max_side=800 y quality=60 para máxima ligereza
+        data_optimizada = ia_engine._normalizar_imagen_a_jpeg_bytes(
+            f, 
+            max_side=800, 
+            quality=60
+        )
+        
+        state.append({
+            "name": getattr(f, "name", "foto.jpg"), 
+            "type": "image/jpeg", 
+            "data": data_optimizada
+        })
+    return state
 
 def _state_to_pil_images(fotos_state) -> List[Image.Image]:
     return [Image.open(io.BytesIO(item["data"])) for item in fotos_state or []]
