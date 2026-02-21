@@ -26,6 +26,11 @@ REGLAS (OBLIGATORIAS):
 4) Ajuste por horas: SUAVE y CAPADO.
    - AJUSTE_HORAS_% debe estar entre -3% y +2% (no más).
 5) Importes enteros (sin decimales).
+REGLA DE ORO DE INTEGRIDAD: 
+Antes de tasar, verifica que TODAS las fotos correspondan a la misma marca y modelo indicados ({marca} {modelo}).
+ Si detectas fotos de un tractor claramente distinto (ej. mezcla de colores verde/amarillo JD con rojo/gris Valtra), 
+ detén el análisis inmediatamente y devuelve únicamente este mensaje:
+'ERROR: SE HAN DETECTADO FOTOS DE DIFERENTES TRACTORES. POR FAVOR, REVISE LA GALERÍA'."
 
 CÁLCULO (OBLIGATORIO):
 - VALOR_BASE: estimación razonable según año, horas y gama del modelo (sin web).
