@@ -56,71 +56,87 @@ def cargar_logo_b64(path: str) -> str:
         return ""
 
 
+# -------------------------------------------------
+# PARSEO RESULTADO_FINAL → METRICS
+# -------------------------------------------------
 def _extraer_bloque_resultado_final(texto: str) -> str:
-    m = re.search(r"BLOQUE:\s*RESULTADO_FINAL(.*?)(?:BLOQUE:|$)", texto, flags=re.S | re.I)
-    return m.group(1).strip() if m else ""
+    if not texto:
+        return ""
+    m = re.search(r"(?is)BLOQUE\s*:\s*RESULTADO_FINAL\s*(.*)", texto)
+    if not m:
+        return ""
+    tail = m.group(1)
+    m2 = re.search(r"(?is)\n\s*BLOQUE\s*:\s*", tail)
+    return tail[: m2.start()] if m2 else tail
 
 
-def _extraer_entero(block: str, key: str):
-    mm = re.search(rf"{re.escape(key)}\s*:\s*([0-9\.\,]+)", block)
-    if not mm:
+def _extraer_entero(block: str, key: str) -> Optional[int]:
+    if not block:
         return None
-    return int(float(mm.group(1).replace(".", "").replace(",", ".")))
-
-
-def _fmt_eur(x: Optional[int]) -> str:
-    if x is None:
-        return "N/D"
+    m = re.search(rf"(?im)^\s*{re.escape(key)}\s*:\s*([\-]?\d+)\s*$", block)
+    if not m:
+        return None
     try:
-        return f"{int(x):,} €".replace(",", ".")
+        return int(m.group(1))
     except Exception:
-        return "N/D"
+        return None
 
 
-def _extraer_bloque_comparables_tabla(texto: str) -> str:
-    m = re.search(r"BLOQUE:\s*COMPARABLES_TABLA(.*?)(?:BLOQUE:|$)", texto, flags=re.S | re.I)
-    return m.group(1).strip() if m else ""
+def _fmt_eur(n: Optional[int]) -> str:
+    if n is None:
+        return "—"
+    s = f"{n:,}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{s} €"
 
 
-def _escape_html(s: str) -> str:
-    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+def _quitar_bloque_resultado_final(texto: str) -> str:
+    if not texto:
+        return ""
+    return re.sub(
+        r"(?is)BLOQUE\s*:\s*RESULTADO_FINAL\s*.*?(?=\n\s*BLOQUE\s*:|\Z)",
+        "",
+        texto,
+    ).strip()
 
 
-def _markdown_tabla_a_html(texto: str) -> str:
-    """
-    Convierte un bloque estilo markdown simple en HTML (tabla + párrafos).
-    """
+# -------------------------------------------------
+# FORMATEO TEXTO IA → HTML
+# -------------------------------------------------
+def formatear_contenido(texto: str) -> str:
     if not texto:
         return ""
 
+    lineas = texto.split("\n")
     out = []
-    lines = [ln.rstrip() for ln in texto.splitlines()]
     en_tabla = False
 
-    for linea in lines:
-        # Tabla markdown
-        if "|" in linea and linea.count("|") >= 2:
-            cols = [c.strip() for c in linea.strip().strip("|").split("|")]
-
-            # header separator
-            if all(set(c) <= {"-", ":"} for c in cols):
+    for linea in lineas:
+        if "|" in linea:
+            cols = [c.strip() for c in linea.split("|") if c.strip()]
+            if not cols:
                 continue
 
             if not en_tabla:
+                out.append('<div class="table-wrap"><table class="md-table"><thead><tr>')
+                for c in cols:
+                    out.append(f"<th>{c}</th>")
+                out.append("</tr></thead><tbody>")
                 en_tabla = True
-                out.append('<div class="table-wrap"><table><tbody>')
+            elif "---" in linea:
+                continue
+            else:
+                out.append("<tr>")
+                for c in cols:
+                    out.append(f"<td>{c}</td>")
+                out.append("</tr>")
+        else:
+            if en_tabla:
+                out.append("</tbody></table></div>")
+                en_tabla = False
 
-            out.append("<tr>" + "".join(f"<td>{_escape_html(c)}</td>" for c in cols) + "</tr>")
-            continue
-
-        # cerrar tabla si veníamos de una
-        if en_tabla:
-            out.append("</tbody></table></div>")
-            en_tabla = False
-
-        if linea.strip():
-            linea = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", linea)
-            out.append(f"<p>{linea}</p>")
+            if linea.strip():
+                linea = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", linea)
+                out.append(f"<p>{linea}</p>")
 
     if en_tabla:
         out.append("</tbody></table></div>")
@@ -165,34 +181,17 @@ def generar_informe_html(
     </div>
     """
 
-    comparables_tabla = _extraer_bloque_comparables_tabla(informe_texto or "")
-    comparables_html = _markdown_tabla_a_html(comparables_tabla) if comparables_tabla else ""
+    texto_sin_rf = _quitar_bloque_resultado_final(informe_texto or "")
+    contenido_final = formatear_contenido(texto_sin_rf)
 
-    # Logo
-    logo_b64 = cargar_logo_b64("Transparente.png")
-    logo_html = f'<img class="logo" src="{logo_b64}">' if logo_b64 else ""
-
-    # Ubicación (viene en base64)
-    ubicacion_html = ""
-    try:
-        if texto_ubicacion:
-            ubic_txt = base64.b64decode(texto_ubicacion.encode("utf-8")).decode("utf-8")
-            if ubic_txt.strip():
-                ubicacion_html = f'<div class="subtitle">{_escape_html(ubic_txt)}</div>'
-    except Exception:
-        ubicacion_html = ""
+    # LOGO
+    logo_src = cargar_logo_b64("Transparente.png")
+    logo_html = f'<img class="logo" src="{logo_src}">' if logo_src else ""
 
     # FOTOS
     fotos_html = ""
     for foto in (lista_fotos or []):
-        # Soporta dos formatos:
-        # - PIL.Image (flujo antiguo)
-        # - dict con bytes ya normalizados: {"data": b"...", "type": "image/jpeg", ...}
-        if isinstance(foto, dict) and "data" in foto:
-            data = foto.get("data") or b""
-            img_b64 = base64.b64encode(data).decode("utf-8") if data else ""
-        else:
-            img_b64 = _img_to_b64_jpg(foto)
+        img_b64 = _img_to_b64_jpg(foto)
         fotos_html += f'<img class="photo" src="data:image/jpeg;base64,{img_b64}">'
 
     vendedor_html = f'<div class="user">👤 {vendedor}</div>' if vendedor else ""
@@ -226,37 +225,37 @@ body {{ margin:0; font-family:Segoe UI,Arial; background:var(--bg); }}
 .user {{ margin-top:6px; font-weight:600; }}
 
 .metrics {{
-  display:grid; grid-template-columns: repeat(3, 1fr);
-  gap:12px; margin:14px 0;
+  display:grid; grid-template-columns:repeat(3,1fr);
+  gap:14px; margin-top:14px;
 }}
 .metric {{
-  background:var(--card); border:1px solid var(--border); border-radius:12px;
-  padding:12px;
+  background:#e6f2e6; border:1px solid var(--border);
+  border-radius:12px; padding:14px 16px;
 }}
-.metric-label {{ font-size:12px; color:var(--muted); }}
-.metric-value {{ font-size:18px; font-weight:800; color:var(--text); margin-top:6px; }}
+.metric-label {{ font-size:12px; opacity:.8; }}
+.metric-value {{
+  margin-top:6px; font-size:38px; font-weight:800; line-height:1;
+}}
 
 .card {{
-  background:var(--card); border:1px solid var(--border); border-radius:12px;
-  padding:14px; margin-top:12px;
+  background:var(--card); border:1px solid var(--border);
+  border-radius:12px; padding:14px; margin-top:14px;
 }}
-.h2 {{ margin:0 0 10px; color:var(--text); font-size:15px; }}
 
 .table-wrap {{ overflow-x:auto; }}
-table {{ width:100%; border-collapse:collapse; }}
-td {{ border:1px solid var(--border); padding:8px; font-size:12px; }}
+table.md-table {{ width:100%; border-collapse:collapse; font-size:12px; }}
+table.md-table th {{ background:var(--green); color:#fff; padding:8px; }}
+table.md-table td {{ padding:8px; border-top:1px solid #eee; }}
 
-.photos {{
-  display:grid; grid-template-columns: repeat(3, 1fr);
-  gap:10px; margin-top:10px;
-}}
-.photo {{
-  width:100%; border-radius:10px; border:1px solid var(--border);
-  object-fit:cover;
-}}
-@media (max-width: 900px) {{
-  .metrics {{ grid-template-columns: 1fr; }}
-  .photos {{ grid-template-columns: 1fr 1fr; }}
+.gallery {{ display:flex; flex-wrap:wrap; gap:10px; }}
+.photo {{ width:calc(50% - 5px); border-radius:10px; border:1px solid var(--border); }}
+
+.footer {{ margin-top:20px; text-align:center; font-size:11px; color:var(--muted); }}
+.ref {{ font-family:monospace; font-size:10px; }}
+
+@media(max-width:650px){{
+  .metrics{{ grid-template-columns:1fr; }}
+  .photo{{ width:100%; }}
 }}
 </style>
 </head>
@@ -264,35 +263,37 @@ td {{ border:1px solid var(--border); padding:8px; font-size:12px; }}
 <body>
 <div class="page">
 
-  <div class="header">
-    <div class="brand">
-      {logo_html}
-      <div>
-        <h1 class="title">Tasación - {marca} {modelo}</h1>
-        <div class="subtitle">Fecha: {fecha_hoy}</div>
-        {ubicacion_html}
-      </div>
-    </div>
-    <div class="meta">
+<div class="header">
+  <div class="brand">
+    {logo_html}
+    <div>
+      <h1 class="title">Tasación de maquinaria</h1>
+      <div class="subtitle">Agrícola Noroeste · Valoración orientativa</div>
       {vendedor_html}
     </div>
   </div>
-
-  {metrics_html}
-
-  <div class="card">
-    <div class="h2">Informe IA</div>
-    <div style="white-space:pre-wrap; font-size:12px; color:var(--text);">{_escape_html(informe_texto)}</div>
+  <div class="meta">
+    <div><b>Activo:</b> {marca} {modelo}</div>
+    <div><b>Fecha:</b> {fecha_hoy}</div>
   </div>
+</div>
 
-  {"<div class='card'><div class='h2'>Comparables</div>" + comparables_html + "</div>" if comparables_html else ""}
+{metrics_html}
 
-  <div class="card">
-    <div class="h2">Fotos</div>
-    <div class="photos">
-      {fotos_html}
-    </div>
-  </div>
+<div class="card">
+  <h2>Resultado del análisis</h2>
+  {contenido_final}
+</div>
+
+<div class="card">
+  <h2>Registro fotográfico</h2>
+  <div class="gallery">{fotos_html}</div>
+</div>
+
+<div class="footer">
+  Documento interno · Agrícola Noroeste
+  <div class="ref">Ref Tasación: {texto_ubicacion}</div>
+</div>
 
 </div>
 </body>
