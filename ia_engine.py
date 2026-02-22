@@ -69,7 +69,7 @@ def _tasacion_sin_busqueda(client, prompt_tasacion, fotos_sorted) -> str:
     """
     if _HAS_TYPES:
         parts = []
-        for f in fotos_sorted:
+    for f in fotos_sorted:
     data = None
 
     # Intentar leer bytes (UploadedFile / BytesIO)
