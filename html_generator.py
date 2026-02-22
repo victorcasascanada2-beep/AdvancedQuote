@@ -190,9 +190,18 @@ def generar_informe_html(
 
     # FOTOS
     fotos_html = ""
+    fotos_html = ""
     for foto in (lista_fotos or []):
+    # Soporta:
+    # - dict {"data": b"..."} (optimizado)
+    # - PIL.Image (antiguo)
+    if isinstance(foto, dict) and "data" in foto:
+        data = foto.get("data") or b""
+        img_b64 = base64.b64encode(data).decode("utf-8") if data else ""
+    else:
         img_b64 = _img_to_b64_jpg(foto)
-        fotos_html += f'<img class="photo" src="data:image/jpeg;base64,{img_b64}">'
+
+    fotos_html += f'<img class="photo" src="data:image/jpeg;base64,{img_b64}">'
 
     vendedor_html = f'<div class="user">👤 {vendedor}</div>' if vendedor else ""
 

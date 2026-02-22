@@ -70,8 +70,26 @@ def _tasacion_sin_busqueda(client, prompt_tasacion, fotos_sorted) -> str:
     if _HAS_TYPES:
         parts = []
         for f in fotos_sorted:
-            data = _normalizar_imagen_a_jpeg_bytes(f)
-            parts.append(types.Part.from_bytes(data=data, mime_type="image/jpeg"))
+    data = None
+
+    # Intentar leer bytes (UploadedFile / BytesIO)
+    try:
+        pos = f.tell()
+        f.seek(0)
+        data = f.read()
+        f.seek(pos)
+    except Exception:
+        try:
+            data = f.getvalue()
+        except Exception:
+            data = None
+
+    # Detectar JPEG por cabecera FF D8
+    is_jpeg = bool(data) and len(data) >= 2 and data[:2] == b"\xff\xd8"
+    if not is_jpeg:
+        data = _normalizar_imagen_a_jpeg_bytes(f)
+
+    parts.append(types.Part.from_bytes(data=data, mime_type="image/jpeg"))
 
         resp = client.models.generate_content(
             model="gemini-2.5-pro",

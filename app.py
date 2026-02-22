@@ -440,7 +440,7 @@ if "result" not in st.session_state:
                         inf = ia_engine.realizar_peritaje(st.session_state.vertex_client, marca, modelo, anio, horas, obs, _state_to_uploadlike(d["fotos_state"]))
                         base_dict = parse_resultado_final(inf)
                         ref_b64 = base64.b64encode(texto_ubicacion.encode("utf-8")).decode("utf-8")
-                        html = html_generator.generar_informe_html(marca, modelo, inf, _state_to_pil_images(d["fotos_state"]), ref_b64,vendedor=st.session_state.get("vendedor", ""))
+                        html = html_generator.generar_informe_html(marca, modelo, inf,d["fotos_state"], ref_b64,vendedor=st.session_state.get("vendedor", ""))
                         
                         # Guardar en Drive
                         id_drive = google_drive_manager.subir_informe(None if ES_CLOUD_RUN else CREDS, f"Tasacion_{marca}_{modelo}.html", html, folder_name=st.session_state["vendedor"])
