@@ -29,88 +29,101 @@ ENV_KEY = "cloud" if ES_CLOUD_RUN else "local"
 def ocultar_chrome_streamlit():
     st.markdown(
         """
+st.markdown("""
 <style>
-/* Fuente general para toda la app */
-html, body, [class*="css"] {
-    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+/* Importar Archivo: La más parecida a la John Deere Sans oficial */
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;900&display=swap');
+
+html, body, [class*="css"], .stMarkdown {
+    font-family: 'Archivo', sans-serif !important;
 }
 
-.block-container {
-    max-width: 1100px;
-    padding-top: 1.8rem;
-    padding-bottom: 2.2rem;
-}
+/* Ocultar elementos innecesarios */
+#MainMenu, footer, header, [data-testid="stHeader"] {visibility: hidden;}
 
-/* Ocultar cromos Streamlit */
-#MainMenu, footer, header {visibility: hidden;}
-
-/* Hero / cabecera */
+/* --- HEADER CORPORATIVO --- */
 .hero {
-  background: linear-gradient(
-    135deg,
-    rgba(63,163,77,.18),
-    rgba(125,186,58,.18)
-  );
-  border: 1px solid rgba(47,111,62,.25);
-  border-radius: 22px;
-  padding: 18px;
-  margin-bottom: 18px;
-}
-.hero h1 { margin: 0; color: #1F3D2B; }
-.hero p { margin: 0; color: #4F6F5B; }
-
-/* Cards */
-.card {
-  background: #F3F8F3;
-  border: 1px solid rgba(47,111,62,.18);
-  border-radius: 18px;
-  padding: 16px;
+    background-color: #367C2B; /* Verde John Deere Oficial */
+    border-left: 12px solid #FFDE00; /* Franja Amarilla lateral para seriedad */
+    padding: 2rem;
+    margin-bottom: 2rem;
+    border-radius: 2px;
 }
 
-/* EL AJUSTE DE TIPOGRAFÍA: Caja de extras limpia */
-.extras-container {
-    background-color: #ffffff;
-    border: 1px solid rgba(47,111,62,.25);
-    border-radius: 14px;
-    padding: 18px;
-    color: #1F3D2B;
-    line-height: 1.6;
-    white-space: pre-wrap;
-    font-size: 0.95rem;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+.hero h1 {
+    color: #FFFFFF !important;
+    font-weight: 900; /* Peso extra para el estilo JD */
+    text-transform: uppercase;
+    letter-spacing: -1px;
+    margin: 0;
+    font-size: 2.2rem;
 }
 
-/* Inputs */
-div[data-baseweb="input"] input,
-div[data-baseweb="textarea"] textarea {
-  border-radius: 14px !important;
-  border: 1px solid rgba(47,111,62,.25) !important;
+.hero p {
+    color: #FFDE00 !important; /* Texto secundario en amarillo */
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 5px;
+    font-size: 0.9rem;
 }
 
-/* Botón principal */
+/* --- BOTONES DE ACCIÓN --- */
 .stButton > button {
-  background: linear-gradient(135deg, #3FA34D, #7DBA3A) !important;
-  color: #ffffff !important;
-  border-radius: 14px !important;
-  border: none !important;
-  font-weight: 700 !important;
-  padding: 0.7rem 1.1rem !important;
+    background-color: #367C2B !important;
+    color: #FFFFFF !important;
+    border: 1px solid #2D6624 !important;
+    border-radius: 2px !important; /* Casi cuadrado para look industrial */
+    padding: 0.75rem 2rem !important;
+    font-weight: 700 !important;
+    text-transform: uppercase;
+    transition: all 0.2s ease;
 }
+
 .stButton > button:hover {
-  filter: brightness(1.05);
-  transform: translateY(-1px);
+    background-color: #FFDE00 !important; /* Cambio a amarillo en hover */
+    color: #367C2B !important;
+    border-color: #FFDE00 !important;
+}
+
+/* --- TARJETAS Y FORMULARIOS --- */
+[data-testid="stForm"] {
+    border: 1px solid #E0E0E0 !important;
+    background-color: #FFFFFF !important;
+    border-radius: 0px !important;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.05) !important;
+}
+
+/* --- MÉTRICAS DE PRECIO --- */
+[data-testid="stMetricValue"] {
+    color: #367C2B !important;
+    font-weight: 700 !important;
+    font-size: 1.8rem !important;
+}
+
+/* --- INFORME IA (Look de documento técnico) --- */
+.ia-report {
+    background-color: #F8F9FA;
+    border-top: 4px solid #367C2B;
+    padding: 25px;
+    color: #1A1A1A;
+    line-height: 1.7;
+    font-size: 1.05rem;
+    box-shadow: inset 0 0 10px rgba(0,0,0,0.02);
 }
 
 .pill {
-  display: inline-block;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: rgba(63,163,77,.15);
-  border: 1px solid rgba(47,111,62,.25);
-  font-size: .85rem;
-  color: #1F3D2B;
+    background-color: #367C2B;
+    color: white;
+    padding: 4px 12px;
+    font-weight: 700;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    display: inline-block;
 }
 </style>
+""", unsafe_allow_html=True)
 
 <div class="hero">
   <h1>🌱 Tasación de maquinaria</h1>
