@@ -1,137 +1,85 @@
-# app.py — Tasador Agrícola Noroeste (VERSIÓN CON REGISTRO DE USUARIOS)
 import streamlit as st
 import os
 import io
 import re
-import base64
 import requests
-from typing import List, Dict, Any, Tuple, Optional
+from datetime import datetime
+from typing import List, Dict, Any, Optional
 from PIL import Image
 
 import ia_engine
 import html_generator
 import google_drive_manager
-import location_manager
-from streamlit_js_eval import get_geolocation
 
 # ------------------------------------------------------------
-# 1. CONFIG PÁGINA Y ESTILOS
+# 1. ESTILOS Y CONFIGURACIÓN
 # ------------------------------------------------------------
 st.set_page_config(page_title="Tasador Pro - Agrícola Noroeste", layout="centered", page_icon="🚜")
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
 html, body, [class*="css"], .stMarkdown { font-family: 'Inter', sans-serif !important; }
 #MainMenu, footer, header, [data-testid="stHeader"] {visibility: hidden;}
-
-.hero {
-    background-color: #367C2B;
-    border-radius: 4px;
-    padding: 2rem;
-    margin-bottom: 2rem;
-    border-bottom: 6px solid #FFDE00;
-}
-.hero h1 { color: #FFFFFF !important; font-weight: 700; margin: 0; }
-.hero p { color: #F0F0F0 !important; margin-top: 5px; }
-
-[data-testid="stForm"], .card {
-    background-color: #F9F9F9 !important;
-    border: 1px solid #E0E0E0 !important;
-    border-radius: 8px !important;
-    padding: 1.5rem !important;
-}
-.ia-report {
-    background-color: #FFFFFF;
-    border-left: 5px solid #367C2B;
-    border: 1px solid #E0E0E0;
-    padding: 20px;
-    border-radius: 4px;
-    color: #1A1A1A;
-}
-.stButton > button {
-    background-color: #367C2B !important;
-    color: #FFFFFF !important;
-    border-radius: 4px !important;
-    font-weight: 600 !important;
-    text-transform: uppercase;
-    width: 100%;
-}
-.stButton > button:hover {
-    background-color: #2D6624 !important;
-    color: #FFDE00 !important;
-}
+.hero { background-color: #367C2B; border-radius: 4px; padding: 2rem; margin-bottom: 2rem; border-bottom: 6px solid #FFDE00; color: white; }
+.hero h1 { font-weight: 700; margin: 0; color: white !important; }
+.stButton > button { background-color: #367C2B !important; color: white !important; border-radius: 4px !important; font-weight: 600 !important; text-transform: uppercase; width: 100%; }
+.stButton > button:hover { background-color: #2D6624 !important; color: #FFDE00 !important; }
+.ia-report { background-color: #FFFFFF; border-left: 5px solid #367C2B; border: 1px solid #E0E0E0; padding: 20px; border-radius: 4px; color: #1A1A1A; }
 </style>
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# 2. LÓGICA DE ENTORNO
+# 2. LÓGICA DE ACCESO
 # ------------------------------------------------------------
-ES_CLOUD_RUN = bool(os.environ.get("K_SERVICE") or os.environ.get("K_REVISION"))
-ENV_KEY = "cloud" if ES_CLOUD_RUN else "local"
+ES_CLOUD_RUN = bool(os.environ.get("K_SERVICE"))
+CREDS = dict(st.secrets["google"]) if "google" in st.secrets else None
 
-def get_creds():
-    if ES_CLOUD_RUN: return None
-    try: return dict(st.secrets["google"])
-    except: return None
-
-CREDS = get_creds()
-
-@st.cache_data(ttl=30, show_spinner=False)
-def get_vendedores_cached(env_key):
-    creds = None if env_key == "cloud" else CREDS
-    return google_drive_manager.leer_vendedores(creds) or []
-
-def invalidate_vendedores_cache():
-    st.cache_data.clear()
-
-# ------------------------------------------------------------
-# 3. PANTALLA DE ACCESO / REGISTRO
-# ------------------------------------------------------------
-if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = False
+if "logged_in" not in st.session_state: st.session_state["logged_in"] = False
 
 if not st.session_state["logged_in"]:
-    st.markdown('<div class="hero"><h1>Tasador Pro</h1><p>Agrícola Noroeste | Acceso Agentes</p></div>', unsafe_allow_html=True)
-    
-    tab1, tab2 = st.tabs(["Seleccionar Agente", "Nuevo Registro"])
-    
+    st.markdown('<div class="hero"><h1>Tasador Pro</h1><p>Acceso Agentes</p></div>', unsafe_allow_html=True)
+    tab1, tab2 = st.tabs(["Ingresar", "Nuevo Registro"])
     with tab1:
-        vendedores = get_vendedores_cached(ENV_KEY)
-        with st.form("login_form"):
-            v_sel = st.selectbox("Tu nombre:", [""] + vendedores)
-            if st.form_submit_button("ENTRAR"):
-                if v_sel:
-                    st.session_state["logged_in"] = True
-                    st.session_state["vendedor"] = v_sel
-                    st.rerun()
-                else:
-                    st.warning("Selecciona un nombre.")
-
+        vendedores = google_drive_manager.leer_vendedores(CREDS) or []
+        v_sel = st.selectbox("Selecciona tu nombre", [""] + vendedores)
+        if st.button("ENTRAR") and v_sel:
+            st.session_state.vendedor = v_sel; st.session_state.logged_in = True; st.rerun()
     with tab2:
-        with st.form("registro_form"):
-            nuevo_nom = st.text_input("Nombre Completo:")
-            if st.form_submit_button("REGISTRAR Y ENTRAR"):
-                if nuevo_nom.strip():
-                    vendedores_actuales = get_vendedores_cached(ENV_KEY)
-                    vendedores_actuales.append(nuevo_nom.strip())
-                    # Guardar en Drive/Excel
-                    google_drive_manager.actualizar_vendedores(None if ES_CLOUD_RUN else CREDS, vendedores_actuales)
-                    invalidate_vendedores_cache()
-                    st.session_state["logged_in"] = True
-                    st.session_state["vendedor"] = nuevo_nom.strip()
-                    st.rerun()
-                else:
-                    st.error("Escribe un nombre válido.")
+        nuevo = st.text_input("Nombre completo")
+        if st.button("REGISTRAR") and nuevo:
+            vendedores.append(nuevo)
+            google_drive_manager.actualizar_vendedores(CREDS, vendedores)
+            st.session_state.vendedor = nuevo; st.session_state.logged_in = True; st.rerun()
     st.stop()
 
 # ------------------------------------------------------------
-# 4. FORMULARIO DE TASACIÓN (Si está logueado)
+# 3. FUNCIONES DE CÁLCULO
+# ------------------------------------------------------------
+def extraer_precio_ia(texto, clave):
+    patron = rf"{clave}.*?:\s*([\d\.]+)"
+    match = re.search(patron, texto, re.IGNORECASE)
+    if match: return float(match.group(1).replace(".", ""))
+    return None
+
+def calcular_extras(cv, pala, trip, tdf, aire):
+    # Coeficientes base (puedes leerlos de Drive si prefieres)
+    total = 0.0
+    cv_f = float(cv) if cv else 0.0
+    if pala: total += (41.6 * cv_f)
+    if tdf: total += (25.0 * cv_f)
+    elif trip: total += (20.8 * cv_f)
+    if aire: total += 1000.0
+    return total
+
+# ------------------------------------------------------------
+# 4. FORMULARIO CON EXTRAS
 # ------------------------------------------------------------
 st.markdown(f'<div class="hero"><h1>Tasador Pro</h1><p>Agente: {st.session_state.vendedor}</p></div>', unsafe_allow_html=True)
 
 if "result" not in st.session_state:
-    with st.form("main_tasacion"):
+    with st.form("main_form"):
+        st.subheader("📋 Datos Técnicos")
         c1, c2 = st.columns(2)
         marca = c1.text_input("Marca", "John Deere")
         modelo = c2.text_input("Modelo")
@@ -139,62 +87,52 @@ if "result" not in st.session_state:
         horas = c2.text_input("Horas")
         cv = c1.text_input("CV")
         obs = st.text_area("Notas de estado")
-        
+
+        st.subheader("🛠️ Equipamiento Extra")
+        e1, e2, e3 = st.columns(3)
+        extra_pala = e1.checkbox("Pala Cargadora")
+        extra_tripuntal = e2.checkbox("Tripuntal Del.")
+        extra_tdf = e3.checkbox("TDF Delantera")
+        extra_aire = e1.checkbox("Frenos de Aire")
+
         fotos = st.file_uploader("Fotos (mín. 4)", accept_multiple_files=True)
         
         if st.form_submit_button("🚀 REALIZAR TASACIÓN"):
             if not modelo or not cv or len(fotos or []) < 4:
-                st.error("Faltan datos o fotos.")
+                st.error("Datos incompletos o pocas fotos.")
             else:
-                with st.spinner("Procesando..."):
-                    try:
-                        client = ia_engine.conectar_vertex(None if ES_CLOUD_RUN else CREDS)
-                        fotos_raw = [{"name": f.name, "data": f.getvalue(), "type": f.type} for f in fotos]
+                with st.spinner("Analizando con IA..."):
+                    client = ia_engine.conectar_vertex(CREDS)
+                    fotos_raw = [{"name": f.name, "data": f.getvalue(), "type": f.type} for f in fotos]
+                    inf = ia_engine.realizar_peritaje(client, marca, modelo, anio, horas, obs, fotos_raw)
+                    
+                    vm = extraer_precio_ia(inf, "VALOR_MERCADO")
+                    vv = extraer_precio_ia(inf, "PRECIO_VENTA")
+                    vc = extraer_precio_ia(inf, "PRECIO_COMPRA")
+                    
+                    if vm:
+                        ajuste_extras = calcular_extras(cv, extra_pala, extra_tripuntal, extra_tdf, extra_aire)
+                        html = html_generator.generar_informe_html(marca, modelo, inf, [Image.open(io.BytesIO(f['data'])) for f in fotos_raw], "REF", vendedor=st.session_state.vendedor)
                         
-                        inf = ia_engine.realizar_peritaje(client, marca, modelo, anio, horas, obs, fotos_raw)
-                        
-                        # Extraer precios (Función simple)
-                        def get_p(k, t):
-                            m = re.search(rf"{k}:\s*(\d+)", t)
-                            return int(m.group(1)) if m else 0
-
-                        vm, vv, vc = get_p("VALOR_MERCADO", inf), get_p("PRECIO_VENTA", inf), get_p("PRECIO_COMPRA", inf)
-                        
-                        if vm > 0:
-                            # Enviar a Sheets
-                            url_sh = "https://script.google.com/macros/s/AKfycbw9hur2xbWaEetwNyl0U0_QaPSiFcZsbXITDJ-mYoswp5HzPxr1LFAwPfdNqSyAVl3h/exec"
-                            requests.post(url_sh, json={
-                                "vendedor": st.session_state.vendedor, "marca": marca, "modelo": modelo,
-                                "horas": horas, "caballos": cv, "precioMercado": vm, "precioVenta": vv, "precioCompra": vc
-                            })
-                            
-                            # HTML y Drive
-                            html = html_generator.generar_informe_html(marca, modelo, inf, [Image.open(io.BytesIO(f['data'])) for f in fotos_raw], "REF", vendedor=st.session_state.vendedor)
-                            google_drive_manager.subir_informe(None if ES_CLOUD_RUN else CREDS, f"Tasa_{modelo}.html", html, folder_name=st.session_state.vendedor)
-                            
-                            st.session_state["result"] = {"inf": inf, "html": html, "vm": vm, "vv": vv, "vc": vc, "mod": modelo}
-                            st.rerun()
-                        else:
-                            st.error("IA no generó precios. Revisa el formato.")
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+                        st.session_state.result = {
+                            "inf": inf, "html": html, "mod": modelo,
+                            "vm": vm + ajuste_extras, "vv": vv + ajuste_extras, "vc": vc + ajuste_extras
+                        }
+                        st.rerun()
+                    else: st.error("Error al obtener precios de la IA.")
 
 # ------------------------------------------------------------
 # 5. PÁGINA DE RESULTADOS
 # ------------------------------------------------------------
 else:
-    res = st.session_state["result"]
-    st.success("Tasación finalizada.")
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("MERCADO", f"{res['vm']:,} €".replace(",", "."))
-    col2.metric("VENTA", f"{res['vv']:,} €".replace(",", "."))
-    col3.metric("COMPRA", f"{res['vc']:,} €".replace(",", "."))
+    res = st.session_state.result
+    st.success("✅ Tasación Calculada (IA + Extras)")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("MERCADO TOTAL", f"{res['vm']:,} €".replace(",", "."))
+    c2.metric("PVP VENTA", f"{res['vv']:,} €".replace(",", "."))
+    c3.metric("COMPRA OFERTA", f"{res['vc']:,} €".replace(",", "."))
 
     st.markdown(f'<div class="ia-report">{res["inf"]}</div>', unsafe_allow_html=True)
-    
     st.download_button("📥 Descargar Informe", res["html"], f"Tasacion_{res['mod']}.html", "text/html")
-    
     if st.button("🔄 Nueva Tasación"):
-        del st.session_state["result"]
-        st.rerun()
+        del st.session_state.result; st.rerun()
