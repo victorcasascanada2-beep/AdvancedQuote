@@ -1,113 +1,152 @@
-import streamlit as st
-import os
+# ia_engine.py
+
 import io
-import re
-import requests
-from datetime import datetime
-from PIL import Image
+from google import genai
+from google.oauth2 import service_account
+from PIL import Image, ImageOps
+import config_prompt
 
-import ia_engine
-import html_generator
-import google_drive_manager
+# API tipado (mejor para imágenes y tools)
+try:
+    from google.genai import types
+    _HAS_TYPES = True
+except Exception:
+    _HAS_TYPES = False
 
-# 1. CONFIGURACIÓN Y ESTILOS
-st.set_page_config(page_title="Tasador Pro - Agrícola Noroeste", layout="centered", page_icon="🚜")
 
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;900&display=swap');
-html, body, [class*="css"], .stMarkdown { font-family: 'Archivo', sans-serif !important; }
-#MainMenu, footer, header, [data-testid="stHeader"] {visibility: hidden;}
-.hero { background-color: #367C2B; border-left: 12px solid #FFDE00; padding: 1.5rem 2rem; margin-bottom: 2rem; }
-.hero h1 { color: #FFFFFF !important; font-weight: 900; text-transform: uppercase; margin: 0; }
-.stButton > button { background-color: #367C2B !important; color: white !important; font-weight: 700; text-transform: uppercase; width: 100%; height: 3.5rem; }
-.ia-report { background-color: #FFFFFF; border-left: 5px solid #367C2B; border: 1px solid #E0E0E0; padding: 20px; color: #1A1A1A; }
-</style>
-""", unsafe_allow_html=True)
+def conectar_vertex(creds_dict=None):
+    """
+    Conexión híbrida a Vertex AI.
+    - creds_dict=None: Cloud Run (ADC)
+    - creds_dict!=None: local/Streamlit (service account en secrets)
+    """
+    if creds_dict is None:
+        return genai.Client(vertexai=True, project="subida-fotos-drive", location="us-central1")
 
-# 2. LÓGICA DE ACCESO
-ES_CLOUD_RUN = bool(os.environ.get("K_SERVICE"))
-CREDS = dict(st.secrets["google"]) if "google" in st.secrets else None
+    pk = str(creds_dict.get("private_key", ""))
+    clean_key = pk.strip().strip('"').strip("'").replace("\\n", "\n")
 
-if "logged_in" not in st.session_state: st.session_state["logged_in"] = False
+    auth_info = {
+        "type": "service_account",
+        "project_id": creds_dict.get("project_id"),
+        "private_key": clean_key,
+        "client_email": creds_dict.get("client_email"),
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
 
-if not st.session_state["logged_in"]:
-    st.markdown('<div class="hero"><h1>Tasador Pro</h1><p>Acceso Agentes</p></div>', unsafe_allow_html=True)
-    tab1, tab2 = st.tabs(["Ingresar", "Registrar Nuevo"])
-    with tab1:
-        vendedores = google_drive_manager.leer_vendedores(CREDS) or []
-        v_sel = st.selectbox("Tu nombre:", [""] + vendedores)
-        if st.button("ENTRAR") and v_sel:
-            st.session_state.vendedor = v_sel; st.session_state.logged_in = True; st.rerun()
-    with tab2:
-        nuevo = st.text_input("Nombre completo:")
-        if st.button("CREAR CUENTA") and nuevo:
-            vendedores.append(nuevo)
-            google_drive_manager.actualizar_vendedores(CREDS, vendedores)
-            st.session_state.vendedor = nuevo; st.session_state.logged_in = True; st.rerun()
-    st.stop()
+    google_creds = service_account.Credentials.from_service_account_info(auth_info)
+    scoped_creds = google_creds.with_scopes(["https://www.googleapis.com/auth/cloud-platform"])
 
-# 3. HELPERS
-def extraer_p(texto, clave):
-    match = re.search(rf"{clave}.*?:\s*([\d\.]+)", texto, re.IGNORECASE)
-    return float(match.group(1).replace(".", "")) if match else None
+    return genai.Client(
+        vertexai=True,
+        project=auth_info["project_id"],
+        location="us-central1",
+        credentials=scoped_creds,
+    )
 
-# 4. FORMULARIO
-st.markdown(f'<div class="hero"><h1>Tasador Pro</h1><p>Agente: {st.session_state.vendedor}</p></div>', unsafe_allow_html=True)
 
-if "result" not in st.session_state:
-    with st.form("main_form"):
-        st.subheader("📋 Datos")
-        c1, c2 = st.columns(2)
-        marca, modelo = c1.text_input("Marca", "John Deere"), c2.text_input("Modelo")
-        anio, horas = c1.text_input("Año"), c2.text_input("Horas")
-        cv = st.text_input("CV")
-        obs = st.text_area("Notas")
+def _normalizar_imagen_a_jpeg_bytes(uploaded_file, max_side=800, quality=60) -> bytes:
+    img = Image.open(uploaded_file)
+    img = ImageOps.exif_transpose(img)
+    img = img.convert("RGB")
 
-        st.subheader("🛠️ Extras")
-        e1, e2, e3 = st.columns(3)
-        pala = e1.checkbox("Pala")
-        anclajes = e1.checkbox("Anclajes")
-        trip = e2.checkbox("Tripuntal")
-        tdf = e2.checkbox("TDF")
-        aire = e3.checkbox("Frenos Aire")
+    w, h = img.size
+    scale = max(w, h) / float(max_side)
+    if scale > 1.0:
+        new_w = int(round(w / scale))
+        new_h = int(round(h / scale))
+        img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
-        st.subheader("🛞 Neumáticos")
-        v_g = st.slider("Vida Traseros (%)", 0, 100, 80, step=10)
-        v_p = st.slider("Vida Delanteros (%)", 0, 100, 80, step=10)
+    buf = io.BytesIO()
+    # Aquí aplicamos la calidad 60 y optimización de tabla JPEG
+    img.save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
 
-        fotos = st.file_uploader("Fotos (mín. 4)", accept_multiple_files=True)
-        if st.form_submit_button("🚀 TASAR"):
-            if not modelo or len(fotos or []) < 4: st.error("Faltan datos o fotos.")
-            else:
-                with st.spinner("IA trabajando..."):
-                    client = ia_engine.conectar_vertex(CREDS)
-                    # USAMOS LA LÓGICA QUE TENÍAS ORIGINALMENTE
-                    fotos_raw = [{"name": f.name, "data": f.getvalue(), "type": f.type} for f in fotos]
-                    
-                    # Llamada directa sin la función que dio error
-                    inf = ia_engine.realizar_peritaje(client, marca, modelo, anio, horas, obs, fotos_raw)
-                    
-                    vm, vv, vc = extraer_p(inf, "VALOR_MERCADO"), extraer_p(inf, "PRECIO_VENTA"), extraer_p(inf, "PRECIO_COMPRA")
-                    
-                    if vm:
-                        # Cálculo de extras manual
-                        cv_f = float(cv) if cv else 0.0
-                        total_ex = (41.6 * cv_f if pala else 0) + (16.6 * cv_f if anclajes else 0) + (25.0 * cv_f if tdf else 20.8 * cv_f if trip else 0) + (1000 if aire else 0)
-                        total_ex -= ((1-(v_g/100))*50*cv_f + (1-(v_p/100))*20*cv_f)
 
-                        html = html_generator.generar_informe_html(marca, modelo, inf, [Image.open(io.BytesIO(f['data'])) for f in fotos_raw], "REF", vendedor=st.session_state.vendedor)
-                        
-                        st.session_state.result = {"inf": inf, "html": html, "vm": vm+total_ex, "vv": vv+total_ex, "vc": vc+total_ex, "mod": modelo}
-                        st.rerun()
+def _tasacion_sin_busqueda(client, prompt_tasacion, fotos_sorted) -> str:
+    """
+    1) Estima precio SIN internet (estable).
+    """
+    if _HAS_TYPES:
+        parts = []
+        for f in fotos_sorted:
+            data = _normalizar_imagen_a_jpeg_bytes(f)
+            parts.append(types.Part.from_bytes(data=data, mime_type="image/jpeg"))
 
-# 5. RESULTADOS
-else:
-    res = st.session_state.result
-    st.success("Tasación Lista")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("MERCADO", f"{res['vm']:,} €".replace(",", "."))
-    c2.metric("VENTA", f"{res['vv']:,} €".replace(",", "."))
-    c3.metric("COMPRA", f"{res['vc']:,} €".replace(",", "."))
-    st.markdown(f'<div class="ia-report">{res["inf"]}</div>', unsafe_allow_html=True)
-    if st.button("🔄 NUEVA"): del st.session_state.result; st.rerun()
+        resp = client.models.generate_content(
+            model="gemini-2.5-pro",
+            contents=[prompt_tasacion, *parts],
+            config=types.GenerateContentConfig(
+                temperature=0.05,
+                max_output_tokens=4096,
+            ),
+        )
+        return resp.text
+
+    # Fallback sin types
+    fotos_pil = []
+    for f in fotos_sorted:
+        data = _normalizar_imagen_a_jpeg_bytes(f)
+        fotos_pil.append(Image.open(io.BytesIO(data)))
+
+    resp = client.models.generate_content(
+        model="gemini-2.5-pro",
+        contents=[prompt_tasacion] + fotos_pil,
+        config={"temperature": 0.05, "max_output_tokens": 4096},
+    )
+    return resp.text
+
+
+def _comparables_con_busqueda(client, prompt_comparables) -> str:
+    """
+    2) Busca anuncios SOLO para justificar (NO toca el precio).
+       Devuelve TABLA sin URLs (según prompt).
+    """
+    if _HAS_TYPES:
+        resp = client.models.generate_content(
+            model="gemini-2.5-pro",
+            contents=[prompt_comparables],
+            config=types.GenerateContentConfig(
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+                temperature=0.0,
+                max_output_tokens=2048,
+            ),
+        )
+        return resp.text
+
+    resp = client.models.generate_content(
+        model="gemini-2.5-pro",
+        contents=[prompt_comparables],
+        config={
+            "tools": [{"google_search": {}}],
+            "temperature": 0.0,
+            "max_output_tokens": 2048,
+        },
+    )
+    return resp.text
+
+
+def realizar_peritaje(client, marca, modelo, anio, horas, observaciones, lista_fotos):
+    """
+    Flujo:
+    1) TASACIÓN (estable, sin búsqueda) => precio
+    2) COMPARABLES (con búsqueda) => justificación en tabla (sin URLs)
+    """
+    fotos_sorted = sorted(lista_fotos, key=lambda f: getattr(f, "name", ""))
+
+    prompt_tasacion = config_prompt.obtener_prompt_tasacion(marca, modelo, anio, horas, observaciones)
+    prompt_comparables = config_prompt.obtener_prompt_comparables(marca, modelo, anio, horas)
+
+    tasacion_txt = _tasacion_sin_busqueda(client, prompt_tasacion, fotos_sorted)
+
+    try:
+        comparables_txt = _comparables_con_busqueda(client, prompt_comparables)
+    except Exception as e:
+        comparables_txt = (
+            'BLOQUE: COMPARABLES_TABLA\n'
+            '| WEB | MODELO | AÑO | HORAS | PRECIO |\n'
+            '|---|---|---|---|---|\n'
+            f'| Error | {str(e)} | N/D | N/D | N/D |\n'
+        )
+
+    return f"{tasacion_txt}\n\n{comparables_txt}"
