@@ -60,19 +60,41 @@ CREDS = dict(st.secrets["google"]) if "google" in st.secrets else None
 if "logged_in" not in st.session_state: st.session_state["logged_in"] = False
 
 if not st.session_state["logged_in"]:
-    st.markdown('<div class="hero"><h1>Tasador Pro</h1><p>Agrícola Noroeste | Acceso Agentes</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero"><h1>Tasador Pro</h1><p>Acceso Agentes</p></div>', unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["Ingresar", "Registrar Nuevo Agente"])
+    
     with tab1:
-        vendedores = google_drive_manager.leer_vendedores(CREDS) or []
-        v_sel = st.selectbox("Selecciona tu nombre", [""] + vendedores)
-        if st.button("ENTRAR") and v_sel:
-            st.session_state.vendedor = v_sel; st.session_state.logged_in = True; st.rerun()
+        # Intentamos leer, si falla o está vacío usamos una lista de emergencia
+        vendedores = google_drive_manager.leer_vendedores(CREDS)
+        if not vendedores or len(vendedores) == 0:
+            st.warning("⚠️ No hay agentes registrados en la base de datos.")
+            v_sel = None
+        else:
+            v_sel = st.selectbox("Selecciona tu nombre:", [""] + vendedores)
+            if st.button("ENTRAR") and v_sel:
+                st.session_state.vendedor = v_sel
+                st.session_state.logged_in = True
+                st.rerun()
+    
     with tab2:
-        nuevo = st.text_input("Nombre completo del agente")
-        if st.button("CREAR CUENTA") and nuevo.strip():
-            vendedores.append(nuevo.strip())
-            google_drive_manager.actualizar_vendedores(CREDS, vendedores)
-            st.session_state.vendedor = nuevo.strip(); st.session_state.logged_in = True; st.rerun()
+        st.info("Escribe tu nombre para darte de alta en el sistema.")
+        nuevo = st.text_input("Nombre completo del nuevo agente:")
+        if st.button("REGISTRAR Y ENTRAR"):
+            if nuevo.strip():
+                # Forzamos la actualización
+                lista_actualizada = vendedores if vendedores else []
+                if nuevo.strip() not in lista_actualizada:
+                    lista_actualizada.append(nuevo.strip())
+                    # Intentamos grabar en el Drive
+                    exito = google_drive_manager.actualizar_vendedores(CREDS, lista_actualizada)
+                
+                # Entramos directamente aunque falle el grabado para romper el bucle
+                st.session_state.vendedor = nuevo.strip()
+                st.session_state.logged_in = True
+                st.success(f"Bienvenido {nuevo}. Accediendo...")
+                st.rerun()
+            else:
+                st.error("Por favor, introduce un nombre válido.")
     st.stop()
 
 # ==========================================
