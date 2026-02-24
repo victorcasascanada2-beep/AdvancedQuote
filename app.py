@@ -36,96 +36,111 @@ def ocultar_chrome_streamlit():
         """
 st.markdown("""
 <style>
-/* Importar Archivo: La más parecida a la John Deere Sans oficial */
-@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;900&display=swap');
+/* Importar fuente Inter para un look moderno y premium */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 html, body, [class*="css"], .stMarkdown {
-    font-family: 'Archivo', sans-serif !important;
+    font-family: 'Inter', -apple-system, sans-serif !important;
 }
 
-/* Ocultar elementos innecesarios */
+/* Ocultar elementos de Streamlit */
 #MainMenu, footer, header, [data-testid="stHeader"] {visibility: hidden;}
 
-/* --- HEADER CORPORATIVO --- */
+/* Fondo de la aplicación */
+.stApp {
+    background-color: #FFFFFF;
+}
+
+/* Hero / Cabecera Profesional */
 .hero {
-    background-color: #367C2B; /* Verde John Deere Oficial */
-    border-left: 12px solid #FFDE00; /* Franja Amarilla lateral para seriedad */
-    padding: 2rem;
+    background-color: #367C2B; /* Verde John Deere */
+    border-radius: 4px; /* Bordes menos redondeados = más serio */
+    padding: 2.5rem;
     margin-bottom: 2rem;
-    border-radius: 2px;
+    border-bottom: 6px solid #FFDE00; /* Detalle en Amarillo John Deere */
 }
 
 .hero h1 {
     color: #FFFFFF !important;
-    font-weight: 900; /* Peso extra para el estilo JD */
-    text-transform: uppercase;
-    letter-spacing: -1px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
     margin: 0;
-    font-size: 2.2rem;
 }
 
 .hero p {
-    color: #FFDE00 !important; /* Texto secundario en amarillo */
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    color: #F0F0F0 !important;
+    font-weight: 400;
+    opacity: 0.9;
     margin-top: 5px;
-    font-size: 0.9rem;
 }
 
-/* --- BOTONES DE ACCIÓN --- */
+/* Contenedores y Cards */
+[data-testid="stForm"], .card {
+    background-color: #F9F9F9 !important;
+    border: 1px solid #E0E0E0 !important;
+    border-radius: 8px !important;
+    padding: 1.5rem !important;
+}
+
+/* Caja de Informe IA / Extras */
+.ia-report, .extras-container {
+    background-color: #FFFFFF;
+    border-left: 5px solid #367C2B;
+    border-right: 1px solid #E0E0E0;
+    border-top: 1px solid #E0E0E0;
+    border-bottom: 1px solid #E0E0E0;
+    padding: 20px;
+    border-radius: 4px;
+    color: #1A1A1A;
+    font-size: 1rem;
+    line-height: 1.6;
+}
+
+/* Inputs y Selectores */
+input, textarea, select {
+    border: 1px solid #C4C4C4 !important;
+    border-radius: 4px !important;
+}
+
+div[data-baseweb="input"]:focus-within {
+    border-color: #367C2B !important;
+}
+
+/* Botones Corporativos */
 .stButton > button {
-    background-color: #367C2B !important;
+    background-color: #367C2B !important; /* Verde */
     color: #FFFFFF !important;
-    border: 1px solid #2D6624 !important;
-    border-radius: 2px !important; /* Casi cuadrado para look industrial */
-    padding: 0.75rem 2rem !important;
-    font-weight: 700 !important;
+    border: none !important;
+    border-radius: 4px !important;
+    padding: 0.6rem 2rem !important;
+    font-weight: 600 !important;
     text-transform: uppercase;
-    transition: all 0.2s ease;
+    letter-spacing: 0.05em;
+    transition: background 0.3s ease;
 }
 
 .stButton > button:hover {
-    background-color: #FFDE00 !important; /* Cambio a amarillo en hover */
-    color: #367C2B !important;
-    border-color: #FFDE00 !important;
+    background-color: #2D6624 !important; /* Verde más oscuro */
+    color: #FFDE00 !important; /* Texto vira a amarillo en hover */
+    border: none !important;
 }
 
-/* --- TARJETAS Y FORMULARIOS --- */
-[data-testid="stForm"] {
-    border: 1px solid #E0E0E0 !important;
-    background-color: #FFFFFF !important;
-    border-radius: 0px !important;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.05) !important;
+/* Etiquetas (Pills) */
+.pill {
+    display: inline-block;
+    padding: 2px 12px;
+    border-radius: 2px;
+    background: #FFDE00; /* Amarillo */
+    color: #367C2B;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
 }
 
-/* --- MÉTRICAS DE PRECIO --- */
+/* Ajuste de métricas */
 [data-testid="stMetricValue"] {
     color: #367C2B !important;
     font-weight: 700 !important;
-    font-size: 1.8rem !important;
-}
-
-/* --- INFORME IA (Look de documento técnico) --- */
-.ia-report {
-    background-color: #F8F9FA;
-    border-top: 4px solid #367C2B;
-    padding: 25px;
-    color: #1A1A1A;
-    line-height: 1.7;
-    font-size: 1.05rem;
-    box-shadow: inset 0 0 10px rgba(0,0,0,0.02);
-}
-
-.pill {
-    background-color: #367C2B;
-    color: white;
-    padding: 4px 12px;
-    font-weight: 700;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    margin-bottom: 10px;
-    display: inline-block;
 }
 </style>
 """, unsafe_allow_html=True)
