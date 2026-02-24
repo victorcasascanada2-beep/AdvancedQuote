@@ -17,7 +17,12 @@ from streamlit_js_eval import get_geolocation
 # ------------------------------------------------------------
 # CONFIG PÁGINA
 # ------------------------------------------------------------
-st.set_page_config(page_title="Tasador Agrícola Noroeste", layout="centered", page_icon="🚜")
+st.markdown("""
+<div class="hero">
+    <h1>Tasador Pro | Agrícola Noroeste</h1>
+    <p>Sistema Inteligente de Valoración de Maquinaria de Ocasión</p>
+</div>
+""", unsafe_allow_html=True)
 
 ES_CLOUD_RUN = bool(os.environ.get("K_SERVICE") or os.environ.get("K_REVISION"))
 ENV_KEY = "cloud" if ES_CLOUD_RUN else "local"
