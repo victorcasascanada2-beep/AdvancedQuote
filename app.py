@@ -14,6 +14,10 @@ import google_drive_manager
 import location_manager
 from streamlit_js_eval import get_geolocation
 
+ID_UNIDAD_COMPARTIDA = "0AEU0RHjR-mDOUk9PVA"
+ID_CARPETA_RAIZ = "1jHfVRjC6I0qPV9ArDIkhoKCYP7Iepmt9"
+ID_EXCEL_HISTORIAL = "1fzedPLwRX4T0sG860ITmcYHp3nHu3GGkxW--y8Qs4v4"
+NOMBRE_FICHERO_USUARIOS = "usuarios.txt"  # Centralizamos el nombre aquí
 # ------------------------------------------------------------
 # CONFIG PÁGINA
 # ------------------------------------------------------------
