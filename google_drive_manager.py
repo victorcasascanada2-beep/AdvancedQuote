@@ -12,7 +12,7 @@ import google.auth
 ID_UNIDAD_COMPARTIDA = "0AEU0RHjR-mDOUk9PVA"  # driveId (Shared Drive)
 ID_CARPETA_RAIZ_TASACIONES = "1jHfVRjC6I0qPV9ArDIkhoKCYP7Iepmt9"  # carpeta raíz donde cuelgan las carpetas vendedor
 
-NOMBRE_FICHERO_VENDEDORES = "vendedores.txt"
+NOMBRE_FICHERO_VENDEDORES = "usuarios.txt"
 NOMBRE_FICHERO_COEFS = "coeficientes_tasacion.json"  # <--- necesario para leer coeficientes
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
