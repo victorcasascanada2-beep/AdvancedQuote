@@ -138,13 +138,14 @@ def escribir_texto_por_nombre(creds_dict, filename: str, contenido: str, mimetyp
 # ------------------------------------------------------------
 # VENDEDORES
 # ------------------------------------------------------------
-def leer_vendedores(creds_dict=None) -> List[str]:
-    texto = leer_texto_por_nombre(creds_dict, NOMBRE_FICHERO_VENDEDORES)
+
+def leer_vendedores(creds_dict) -> List[str]:
+    """Carga la lista de usuarios desde el archivo configurado."""
+    texto = leer_texto_por_nombre(creds_dict, NOMBRE_FICHERO_USUARIOS)
     if not texto:
-        print("⚠️ vendedores.txt no encontrado o vacío.", file=sys.stderr)
-        return []
-    vendedores = sorted({n.strip() for n in texto.splitlines() if n.strip()})
-    return vendedores
+        print(f"⚠️ Usando lista de respaldo para {NOMBRE_FICHERO_USUARIOS}")
+        return ["Vendedor 1", "Vendedor 2", "Administrador"]
+    return sorted({n.strip() for n in texto.splitlines() if n.strip()})
 
 
 def actualizar_vendedores(creds_dict, lista_nombres: List[str]) -> bool:
