@@ -379,7 +379,7 @@ loc = get_geolocation(component_key="gps_v1")
 texto_ubicacion = location_manager.codificar_coordenadas(loc["coords"]["latitude"], loc["coords"]["longitude"]) if loc and "coords" in loc else "UBICACIÓN NO DETECTADA"
 
 # DRAFT SETUP
-st.session_state.setdefault("draft", {"marca": "Valtra", "modelo": "G125", "anio": "2025", "horas": "2500", "cv": "", "kg_contrapesos": "0", "vida_neum_grandes": "", "vida_neum_pequenos": "", "obs": "", "fotos_state": [], "extra_pala": False, "extra_anclajes_pala": False, "extra_tripuntal_del": False, "extra_tdf_del": False, "extra_compresor": False, "extra_autoguiado": False})
+st.session_state.setdefault("draft", {"marca": "John Deere", "modelo": "6175M", "anio": "2018", "horas": "9988", "cv": "175", "kg_contrapesos": "0", "vida_neum_grandes": "", "vida_neum_pequenos": "", "obs": "", "fotos_state": [], "extra_pala": False, "extra_anclajes_pala": False, "extra_tripuntal_del": False, "extra_tdf_del": False, "extra_compresor": False, "extra_autoguiado": False})
 OPC_VIDA = [""] + [str(x) for x in range(0, 101, 20)]
 
 # ------------------------------------------------------------
