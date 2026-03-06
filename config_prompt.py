@@ -33,10 +33,16 @@ Antes de tasar, verifica que TODAS las fotos correspondan a la misma marca y mod
 'ERROR: SE HAN DETECTADO FOTOS DE DIFERENTES TRACTORES. POR FAVOR, REVISE LA GALERÍA'."
 
 CÁLCULO (OBLIGATORIO):
+    Horas/año	Interpretación	Ajuste típico
+    <500	muy pocas	+5% a +10%
+    500–700	pocas	+2% a +5%
+    700–900	normales	0%
+    900–1100	altas	−3% a −6%
+    >1100	muy altas	−8% a −15%
 - VALOR_BASE: estimación razonable según año, horas y gama del modelo (sin web).
 - VALOR_MERCADO = VALOR_BASE * (1 + AJUSTE_HORAS_%/100) * (1 + AJUSTE_ESTADO_%/100)
 - PRECIO_VENTA = VALOR_MERCADO * 0.92
-- PRECIO_COMPRA = VALOR_MERCADO * 0.85
+- PRECIO_COMPRA = VALOR_MERCADO * 0.80
 
 FORMATO DE SALIDA (EXACTO Y OBLIGATORIO):
 1) LO PRIMERO de tu respuesta debe ser este bloque EXACTO (sin bullets, una línea por campo):
