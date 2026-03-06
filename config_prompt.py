@@ -24,7 +24,7 @@ REGLAS (OBLIGATORIAS):
 2) Si algo NO es claramente visible => escribe "NO VERIFICABLE" y NO lo uses para ajustar el precio.
 3) Ajustes por estado: SOLO por evidencias claras (indica evidencia y %).
 4) Ajuste por horas: SUAVE y CAPADO.
-   - AJUSTE_HORAS_% debe estar entre -3% y +2% (no más).
+   - AJUSTE_HORAS_% debe estar entre -6% y +2% (no más).
 5) Importes enteros (sin decimales).
 REGLA DE ORO DE INTEGRIDAD: 
 Antes de tasar, verifica que TODAS las fotos correspondan a la misma marca y modelo indicados ({marca} {modelo}).
@@ -38,7 +38,6 @@ CÁLCULO (OBLIGATORIO):
     500–700	pocas	+2% a +5%
     700–900	normales	0%
     900–1100	altas	−3% a −6%
-    >1100	muy altas	−8% a −15%
 - VALOR_BASE: estimación razonable según año, horas y gama del modelo (sin web).
 - VALOR_MERCADO = VALOR_BASE * (1 + AJUSTE_HORAS_%/100) * (1 + AJUSTE_ESTADO_%/100)
 - PRECIO_VENTA = VALOR_MERCADO * 0.92
