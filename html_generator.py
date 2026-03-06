@@ -73,7 +73,7 @@ def _extraer_bloque_resultado_final(texto: str) -> str:
 def _extraer_entero(block: str, key: str) -> Optional[int]:
     if not block:
         return None
-    m = re.search(rf"(?im)^\s*{re.escape(key)}\s*:\s*([\-]?\d+)\s*$", block)
+    m = re.search(rf"(?im)^\s*-?\s*{re.escape(key)}\s*:\s*([\-]?\d+)\s*$", block)
     if not m:
         return None
     try:
@@ -89,6 +89,13 @@ def _fmt_eur(n: Optional[int]) -> str:
     return f"{s} €"
 
 
+def _fmt_eur_float(n: Optional[float]) -> str:
+    if n is None:
+        return "—"
+    s = f"{round(n):,}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{s} €"
+
+
 def _quitar_bloque_resultado_final(texto: str) -> str:
     if not texto:
         return ""
@@ -97,6 +104,24 @@ def _quitar_bloque_resultado_final(texto: str) -> str:
         "",
         texto,
     ).strip()
+
+
+def _texto_plano_a_html(texto: str) -> str:
+    if not texto:
+        return ""
+    lineas = texto.splitlines()
+    out = []
+    for linea in lineas:
+        linea = linea.strip()
+        if not linea:
+            continue
+        linea = (
+            linea.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        out.append(f"<p>{linea}</p>")
+    return "\n".join(out)
 
 
 # -------------------------------------------------
@@ -154,15 +179,27 @@ def generar_informe_html(
     lista_fotos: list,
     texto_ubicacion: str,
     vendedor: str = "",
+    base_dict: Optional[dict] = None,
+    extras_total: float = 0.0,
+    bloque_extras: str = "",
 ) -> bytes:
 
     fecha_hoy = datetime.datetime.now().strftime("%d/%m/%Y")
 
     # --- METRICS ---
     block_rf = _extraer_bloque_resultado_final(informe_texto or "")
-    valor_mercado = _extraer_entero(block_rf, "VALOR_MERCADO")
-    precio_venta = _extraer_entero(block_rf, "PRECIO_VENTA")
-    precio_compra = _extraer_entero(block_rf, "PRECIO_COMPRA")
+    base_dict = base_dict or {}
+
+    valor_mercado = base_dict.get("VALOR_MERCADO")
+    precio_venta = base_dict.get("PRECIO_VENTA")
+    precio_compra = base_dict.get("PRECIO_COMPRA")
+
+    if valor_mercado is None:
+        valor_mercado = _extraer_entero(block_rf, "VALOR_MERCADO")
+    if precio_venta is None:
+        precio_venta = _extraer_entero(block_rf, "PRECIO_VENTA")
+    if precio_compra is None:
+        precio_compra = _extraer_entero(block_rf, "PRECIO_COMPRA")
 
     metrics_html = f"""
     <div class="metrics">
@@ -180,6 +217,43 @@ def generar_informe_html(
       </div>
     </div>
     """
+
+    extras_html = ""
+    if bloque_extras:
+        extras_html = f"""
+        <div class="card">
+          <h2>Extras / Ajustes (Aparte)</h2>
+          <div class="extras-box">
+            {_texto_plano_a_html(bloque_extras)}
+          </div>
+        </div>
+        """
+
+    referencia_html = ""
+    if valor_mercado is not None:
+        ref_mercado = float(valor_mercado) + float(extras_total or 0)
+        ref_venta = float(precio_venta or 0) + float(extras_total or 0)
+        ref_compra = float(precio_compra or 0) + float(extras_total or 0)
+
+        referencia_html = f"""
+        <div class="card">
+          <h2>Referencia (base + extras) — solo orientativo</h2>
+          <div class="metrics">
+            <div class="metric">
+              <div class="metric-label">MERCADO + EXTRAS</div>
+              <div class="metric-value">{_fmt_eur_float(ref_mercado)}</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">VENTA + EXTRAS</div>
+              <div class="metric-value">{_fmt_eur_float(ref_venta)}</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">COMPRA + EXTRAS</div>
+              <div class="metric-value">{_fmt_eur_float(ref_compra)}</div>
+            </div>
+          </div>
+        </div>
+        """
 
     texto_sin_rf = _quitar_bloque_resultado_final(informe_texto or "")
     contenido_final = formatear_contenido(texto_sin_rf)
@@ -242,6 +316,17 @@ body {{ margin:0; font-family:Segoe UI,Arial; background:var(--bg); }}
   border-radius:12px; padding:14px; margin-top:14px;
 }}
 
+.extras-box {{
+  background:#f8fbf8;
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:12px 14px;
+}}
+.extras-box p {{
+  margin:6px 0;
+  white-space:pre-wrap;
+}}
+
 .table-wrap {{ overflow-x:auto; }}
 table.md-table {{ width:100%; border-collapse:collapse; font-size:12px; }}
 table.md-table th {{ background:var(--green); color:#fff; padding:8px; }}
@@ -254,6 +339,7 @@ table.md-table td {{ padding:8px; border-top:1px solid #eee; }}
 .ref {{ font-family:monospace; font-size:10px; }}
 
 @media(max-width:650px){{
+  .header {{ flex-direction:column; }}
   .metrics{{ grid-template-columns:1fr; }}
   .photo{{ width:100%; }}
 }}
@@ -279,6 +365,8 @@ table.md-table td {{ padding:8px; border-top:1px solid #eee; }}
 </div>
 
 {metrics_html}
+{extras_html}
+{referencia_html}
 
 <div class="card">
   <h2>Resultado del análisis</h2>
