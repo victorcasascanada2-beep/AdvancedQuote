@@ -42,7 +42,7 @@ CÁLCULO (OBLIGATORIO):
 - VALOR_MERCADO = VALOR_BASE * (1 + AJUSTE_HORAS_%/100) * (1 + AJUSTE_ESTADO_%/100)
 - PRECIO_VENTA = VALOR_MERCADO * 0.92
 - PRECIO_COMPRA = VALOR_MERCADO * 0.80
-- Para los precios tener en cuenta si se ha añadido en el comentario algun valor para sumar o restarlo de los totales.
+- Para los precios tener en cuenta si se ha añadido en el comentario algun valor para sumar o restarlo de los totales. Comentarlo en la salida de la tasacion
 
 FORMATO DE SALIDA (EXACTO Y OBLIGATORIO):
 1) LO PRIMERO de tu respuesta debe ser este bloque EXACTO (sin bullets, una línea por campo):
