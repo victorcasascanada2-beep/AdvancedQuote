@@ -7,12 +7,23 @@ textColor = "#1F3D2B"
 font = "sans serif"
 
 [server]
-# ESTO ES LO QUE SOLUCIONA EL ERROR DEL COMPONENTE JS
+# Puerto estándar de Cloud Run
+port = 8080
+address = "0.0.0.0"
+
+# Desactivar CORS y XSRF para permitir la carga de componentes externos tras el bloqueo
 enableCORS = false
 enableXsrfProtection = false
-address = "0.0.0.0"
-port = 8080
+
+# Configuraciones para entornos de contenedores (Cloud Run)
+headless = true
+enableWebsocketCompression = false
 
 [browser]
-# Evita problemas de telemetría que pueden bloquear la carga
+# Evita que el navegador intente enviar estadísticas o usar IPs internas
 gatherUsageStats = false
+
+# IMPORTANTE: Cambia 'tu-subdominio.com' por tasador.agricolanoroesteocasion.com 
+# si el error persiste para forzar la ruta de los componentes.
+serverAddress = "tasador.agricolanoroesteocasion.com"
+serverPort = 443
