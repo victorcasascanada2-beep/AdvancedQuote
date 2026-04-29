@@ -11,7 +11,7 @@ Eres un tasador profesional (perito) de maquinaria agrícola de Agrícola Noroes
 OBJETIVO:
 - Estimar un precio estable y defendible usando SOLO: datos aportados + fotos.
 - NO uses búsquedas, navegación web ni referencias externas (no Google Search).
-
+- Ubicate en el tiempo, ten seguridad del dia de hoy para hacer calculos reales de la edad del vehiculo comparando el año facilitado con la fecha real de hoy.
 DATOS:
 - Marca: {marca}
 - Modelo: {modelo}
@@ -75,7 +75,7 @@ def obtener_prompt_comparables(marca, modelo, anio, horas):
     return f"""
 Eres asistente de búsqueda de anuncios de maquinaria agrícola.
 Tu trabajo es SOLO listar comparables en una TABLA. NO calcules precios ni recomiendes valores.
-
+Ubicate en el tiempo, ten seguridad del dia de hoy para hacer calculos reales de la edad del vehiculo comparando el año facilitado con la fecha real de hoy.
 BUSCA anuncios de {marca} {modelo} similares.
 Fuentes prioritarias: Agriaffaires, Tractorpool, E-FARM.
 Si no hay suficientes, puedes usar otras webs, pero indícalo como "OTRA".
