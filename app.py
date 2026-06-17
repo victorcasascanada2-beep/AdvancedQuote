@@ -13,21 +13,7 @@ import html_generator
 import google_drive_manager
 import location_manager
 from streamlit_js_eval import get_geolocation
-from google.oauth2 import service_account  # <--- Añadimos esta librería para las credenciales
 
-# 1. Recuperamos de forma segura tu JSON de los Secrets
-if "google" in st.secrets:
-    creds = service_account.Credentials.from_service_account_info(st.secrets["google"])
-else:
-    st.error("No se han encontrado las credenciales [google] en los Secrets de Streamlit.")
-    st.stop()
-
-# 2. Inicializamos Vertex pasándole la firma digital legítima
-aiplatform.init(
-    project="subida-fotos-drive",
-    location="europe-west1",
-    credentials=creds  # <--- Con esto se identifica ante el muro de IAP sin quedarse colgado
-)
 # ------------------------------------------------------------
 # CONFIG PÁGINA
 # ------------------------------------------------------------
