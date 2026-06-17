@@ -13,7 +13,21 @@ import html_generator
 import google_drive_manager
 import location_manager
 from streamlit_js_eval import get_geolocation
+from google.oauth2 import service_account  # <--- Añadimos esta librería para las credenciales
 
+# 1. Cargamos de forma segura tu JSON de los Secrets
+if "google" in st.secrets:
+    creds = service_account.Credentials.from_service_account_info(st.secrets["google"])
+else:
+    st.error("No se han encontrado las credenciales [google] en los Secrets.")
+    st.stop()
+
+# 2. Inicializamos Vertex pasándole la LLAVE CORRECTA en la mano
+aiplatform.init(
+    project="subida-fotos-drive",
+    location="europe-west1",
+    credentials=creds  # <--- LE PROVEEMOS LA LLAVE AQUÍ
+)
 # ------------------------------------------------------------
 # CONFIG PÁGINA
 # ------------------------------------------------------------
